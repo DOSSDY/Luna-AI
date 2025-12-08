@@ -40,6 +40,8 @@ export interface Agent {
   description: string;
   voiceName: string;
   stylePrompt: string;
+  hiddenDirectives: string[]; // Specific instructions for the model (e.g., "Interrupt if...")
+  evaluationCriteria: string[]; // What this agent cares about most in the report
   color: string;
 }
 
@@ -68,6 +70,7 @@ export interface SessionAnalysis {
   empathyScore: number; // 1-10
   feedback: string;
   topic: string;
+  agentId?: string; // Track who gave the feedback
 }
 
 export interface UserProfile {

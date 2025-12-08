@@ -38,7 +38,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
           <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-teal-400/20 to-emerald-400/20 flex items-center justify-center border border-teal-500/20 shadow-2xl shadow-teal-900/30 mb-6">
             <MessageCircleHeart className="w-10 h-10 text-teal-400" />
           </div>
-          <h1 className="text-4xl font-semibold text-stone-100 mb-2 tracking-tight text-center">PsySense Voice</h1>
+          <h1 className="text-4xl font-semibold text-stone-100 mb-2 tracking-tight text-center">Luna</h1>
           <p className="text-stone-400 text-center text-lg">Your personal AI communication coach.</p>
         </div>
 

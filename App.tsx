@@ -194,7 +194,9 @@ const App: React.FC = () => {
        setIsAnalyzingSession(true);
        try {
          const scenarioLabel = displayScenarios.find(s => s.id === selectedScenario)?.label || 'General';
-         const analysis = await analysisServiceRef.current.analyzeSession(messages, scenarioLabel);
+         const activeAgent = AGENTS.find(a => a.id === selectedAgentId);
+         
+         const analysis = await analysisServiceRef.current.analyzeSession(messages, scenarioLabel, activeAgent);
          
          if (analysis) {
              const updatedUser = StorageService.addSessionAnalysis(analysis);
@@ -207,7 +209,7 @@ const App: React.FC = () => {
        }
     }
 
-  }, [messages, selectedScenario, displayScenarios]);
+  }, [messages, selectedScenario, displayScenarios, selectedAgentId]);
 
   const handleAnalyzeVideo = async () => {
     if (!videoRef.current || !liveClientRef.current) return;
@@ -498,7 +500,7 @@ const App: React.FC = () => {
             onClick={toggleMenu} 
             className="p-2 text-stone-400 hover:text-white transition-colors"
           >
-             {desktopMenuOpen ? <PanelLeftClose className="w-6 h-6" /> : <PanelLeftOpen className="w-6 h-6" />}
+             {desktopMenuOpen ? <PanelLeftClose className="w-6 h-6" /> : <PanelLeftClose className="w-6 h-6" />}
           </button>
           <span className="ml-4 font-semibold text-lg text-stone-100 capitalize">
               {currentView === 'recommendations' ? 'Recommended Resources' : 'My Profile'}

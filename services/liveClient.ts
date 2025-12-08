@@ -87,9 +87,17 @@ export class LiveClient {
       // --- CONSTRUCT SYSTEM INSTRUCTION ---
       let effectiveSystemInstruction = SYSTEM_INSTRUCTION_BASE;
 
-      // 1. Agent Persona (Level 4)
+      // 1. Agent Persona (Level 4 - Enhanced)
       if (config.activeAgent) {
         effectiveSystemInstruction += `\n\nYOUR PERSONA:\n${config.activeAgent.stylePrompt}\n`;
+        
+        // Inject Hidden Directives for Agentic Behavior
+        if (config.activeAgent.hiddenDirectives?.length) {
+             effectiveSystemInstruction += `\n\nOPERATIONAL DIRECTIVES (Follow these strictly):\n`;
+             config.activeAgent.hiddenDirectives.forEach(d => {
+                 effectiveSystemInstruction += `- ${d}\n`;
+             });
+        }
       }
 
       // 2. RAG Context (Level 3)
