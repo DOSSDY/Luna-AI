@@ -1,0 +1,8 @@
+{
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ],
+  "name": "LunaVoice",
+  "description": "Advanced communication coaching with multimodal analysis"
+}
