@@ -5,9 +5,10 @@ import { Activity } from 'lucide-react';
 
 interface TranscriptProps {
   messages: ChatMessage[];
+  agentName?: string;
 }
 
-export const Transcript: React.FC<TranscriptProps> = ({ messages }) => {
+export const Transcript: React.FC<TranscriptProps> = ({ messages, agentName }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -48,7 +49,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ messages }) => {
               >
                 <div className="flex items-center gap-2 mb-1 opacity-70">
                    <span className={`text-[10px] font-bold uppercase tracking-wider ${msg.role === 'user' ? 'text-teal-400' : 'text-orange-400'}`}>
-                    {msg.role === 'user' ? 'You' : 'Luna'}
+                    {msg.role === 'user' ? 'You' : (agentName || 'Luna')}
                   </span>
                 </div>
                 

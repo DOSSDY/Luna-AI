@@ -247,6 +247,7 @@ const App: React.FC = () => {
   const insightProgress = Math.min((userMsgCount / insightThreshold) * 100, 100);
 
   // -- Views Components --
+  const activeAgent = AGENTS.find(a => a.id === selectedAgentId) || AGENTS[0];
 
   const renderCallView = () => (
     <div className="flex flex-col h-full w-full relative overflow-hidden">
@@ -458,7 +459,7 @@ const App: React.FC = () => {
             {status === LiveStatus.CONNECTED && (
                  <div className="flex-1 w-full min-h-0 mt-2 flex flex-col justify-end relative">
                     <div className="flex-1 min-h-0 overflow-hidden relative">
-                         <Transcript messages={messages} />
+                         <Transcript messages={messages} agentName={activeAgent.name} />
                     </div>
                  </div>
             )}
