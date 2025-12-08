@@ -1,6 +1,7 @@
 
 export enum LiveStatus {
   DISCONNECTED = 'disconnected',
+  RESEARCHING = 'researching',
   CONNECTING = 'connecting',
   CONNECTED = 'connected',
   ERROR = 'error',
@@ -32,13 +33,50 @@ export interface Scenario {
   prompt: string;
 }
 
+export interface Agent {
+  id: string;
+  name: string;
+  role: string;
+  description: string;
+  voiceName: string;
+  stylePrompt: string;
+  color: string;
+}
+
+export interface KnowledgeSnippet {
+  id: string;
+  title: string;
+  content: string;
+  tags: string[];
+}
+
 export type AppView = 'call' | 'recommendations' | 'profile';
+
+export type CoachingStyle = 'gentle' | 'direct' | 'analytical';
+
+export interface UserPreferences {
+  coachingStyle: CoachingStyle;
+  focusAreas: string[];
+  communicationGoal: string;
+}
+
+export interface SessionAnalysis {
+  id: string;
+  timestamp: number;
+  clarityScore: number; // 1-10
+  confidenceScore: number; // 1-10
+  empathyScore: number; // 1-10
+  feedback: string;
+  topic: string;
+}
 
 export interface UserProfile {
   id: string;
   name: string;
   email: string;
   avatarUrl?: string;
+  preferences?: UserPreferences;
+  history: SessionAnalysis[];
 }
 
 export type Tone = 'neutral' | 'warm' | 'anxious' | 'encouraging' | 'assertive';

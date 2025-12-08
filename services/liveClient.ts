@@ -1,8 +1,8 @@
 
 import { GoogleGenAI, LiveServerMessage, Modality, Type } from '@google/genai';
-import { SYSTEM_INSTRUCTION, VOICE_NAME } from '../constants';
+import { SYSTEM_INSTRUCTION_BASE } from '../constants';
 import { createAudioBlob, base64ToArrayBuffer, int16ToFloat32 } from './audioUtils';
-import { LiveStatus, Scenario, Tone } from '../types';
+import { LiveStatus, Scenario, Tone, UserPreferences, Agent } from '../types';
 
 interface LiveClientCallbacks {
   onStatusChange: (status: LiveStatus) => void;
@@ -16,6 +16,9 @@ interface LiveClientCallbacks {
 interface ConnectConfig {
     useVideo: boolean;
     scenarioPrompt?: string;
+    preferences?: UserPreferences;
+    activeAgent?: Agent;
+    ragContext?: string;
 }
 
 export class LiveClient {
@@ -81,13 +84,36 @@ export class LiveClient {
 
       this.startAnalysisLoop();
 
-      // Construct effective system instruction
-      let effectiveSystemInstruction = SYSTEM_INSTRUCTION;
-      if (config.scenarioPrompt) {
-          effectiveSystemInstruction += `\n\nCURRENT SCENARIO CONTEXT:\nThe user has selected a specific practice scenario. ${config.scenarioPrompt}\n\nCRITICAL INSTRUCTION: You MUST speak first immediately. Start the conversation by acknowledging this context and asking the user a relevant opening question.`;
-      } else {
-          effectiveSystemInstruction += `\n\nCRITICAL INSTRUCTION: You MUST speak first immediately. Start the conversation by introducing yourself warmly.`;
+      // --- CONSTRUCT SYSTEM INSTRUCTION ---
+      let effectiveSystemInstruction = SYSTEM_INSTRUCTION_BASE;
+
+      // 1. Agent Persona (Level 4)
+      if (config.activeAgent) {
+        effectiveSystemInstruction += `\n\nYOUR PERSONA:\n${config.activeAgent.stylePrompt}\n`;
       }
+
+      // 2. RAG Context (Level 3)
+      if (config.ragContext) {
+        effectiveSystemInstruction += `\n\nCONSULTED KNOWLEDGE BASE:\n${config.ragContext}\n`;
+      }
+
+      // 3. User Preferences (Level 5)
+      if (config.preferences) {
+          effectiveSystemInstruction += `\n\nUSER PERSONALIZATION:\n
+          - Style: ${config.preferences.coachingStyle.toUpperCase()}.
+          - Goals: ${config.preferences.focusAreas.join(', ')}.
+          - Note: "${config.preferences.communicationGoal}".
+          `;
+      }
+
+      // 4. Scenario
+      if (config.scenarioPrompt) {
+          effectiveSystemInstruction += `\n\nCURRENT SCENARIO: ${config.scenarioPrompt}\n\nCRITICAL: Start by acknowledging this context.`;
+      } else {
+          effectiveSystemInstruction += `\n\nCRITICAL: Start the conversation by introducing yourself as ${config.activeAgent?.name || 'Luna'}.`;
+      }
+
+      const voiceName = config.activeAgent?.voiceName || 'Zephyr';
 
       // Connect to Gemini Live
       this.sessionPromise = this.ai.live.connect({
@@ -95,7 +121,7 @@ export class LiveClient {
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE_NAME } },
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceName } },
           },
           systemInstruction: effectiveSystemInstruction,
           inputAudioTranscription: {},
@@ -155,10 +181,6 @@ export class LiveClient {
     }
   }
 
-  /**
-   * Captures a snapshot analysis using the high-reasoning Gemini 3 Pro model.
-   * This provides deeper insights into body language than the streaming model.
-   */
   public async analyzeVideoSnapshot(base64Image: string): Promise<string> {
     try {
       const response = await this.ai.models.generateContent({
@@ -166,9 +188,7 @@ export class LiveClient {
         contents: {
           parts: [
             { 
-              text: "You are an expert non-verbal communication coach. Analyze this video frame of the user. " +
-                    "Identify key indicators of their emotional state, confidence level, and engagement based on facial expressions, eye contact, and posture. " +
-                    "Provide 2-3 short, actionable tips to improve their presence. Keep the response concise and supportive." 
+              text: "You are an expert non-verbal communication coach. Analyze this video frame. Identify key indicators of emotional state and confidence. Provide 2-3 short, actionable tips." 
             },
             {
               inlineData: {
@@ -190,8 +210,6 @@ export class LiveClient {
       if (!this.sessionPromise) return;
       try {
           const session = await this.sessionPromise;
-          // Send 0.5s of silence to trigger the model's turn if it's waiting for input
-          // This acts as a "start signal" without user needing to speak
           const silence = new Float32Array(16000 * 0.5); 
           const blob = createAudioBlob(silence, 16000);
           session.sendRealtimeInput({ media: blob });
@@ -201,14 +219,12 @@ export class LiveClient {
   }
 
   public async disconnect() {
-    // 1. Stop processing FIRST to prevent new data from entering the pipeline
     this.stopAudioProcessing();
     this.updateStatus(LiveStatus.DISCONNECTED);
 
-    // 2. Close session safely
     if (this.sessionPromise) {
       const currentPromise = this.sessionPromise;
-      this.sessionPromise = null; // Detach immediately to prevent race conditions
+      this.sessionPromise = null; 
 
       try {
         const session = await currentPromise;
@@ -216,7 +232,6 @@ export class LiveClient {
             session.close();
         }
       } catch (e) {
-          // Swallow errors during close, as we are disconnecting anyway
       }
     }
   }
@@ -227,8 +242,6 @@ export class LiveClient {
 
   private handleOnOpen() {
     this.updateStatus(LiveStatus.CONNECTED);
-    
-    // Trigger the model to speak first by sending a silent "poke"
     this.wakeModel();
 
     if (!this.inputAudioContext || !this.stream) return;
@@ -237,27 +250,21 @@ export class LiveClient {
     this.processor = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
 
     this.processor.onaudioprocess = (e) => {
-      // CRITICAL: Strict check to ensure we don't send data if disconnected or tearing down
+      // Safety check: ensure we are actually connected before processing
       if (this.status !== LiveStatus.CONNECTED || !this.sessionPromise) return;
 
       const inputData = e.inputBuffer.getChannelData(0);
       const blob = createAudioBlob(inputData, 16000);
       
-      // Capture local reference
       const currentSessionPromise = this.sessionPromise;
-      
       if (currentSessionPromise) {
           currentSessionPromise.then((session) => {
-            // Re-check status inside the promise resolution to avoid race condition
+            // Re-check status inside the microtask to avoid race conditions on disconnect
             if (this.status !== LiveStatus.CONNECTED) return;
             try { 
                 session.sendRealtimeInput({ media: blob }); 
-            } catch (err) { 
-                // Silently fail if send fails (e.g. network glitch or closed socket)
-            }
-          }).catch((_e) => {
-             // Silently swallow unhandled rejections from the promise chain
-          });
+            } catch (err) {}
+          }).catch((_e) => {});
       }
     };
 
@@ -276,8 +283,6 @@ export class LiveClient {
 
     const canvasEl = document.createElement('canvas');
     const ctx = canvasEl.getContext('2d');
-
-    // Send frames at 2 FPS to reduce bandwidth but maintain body language context
     const FRAME_RATE = 2; 
 
     this.videoInterval = window.setInterval(() => {
@@ -288,8 +293,6 @@ export class LiveClient {
         ctx.drawImage(videoEl, 0, 0);
         
         const base64 = canvasEl.toDataURL('image/jpeg', 0.6).split(',')[1];
-
-        // Ensure session exists and is connected before sending video frame
         const currentSessionPromise = this.sessionPromise;
 
         if (currentSessionPromise && this.status === LiveStatus.CONNECTED) {
@@ -315,7 +318,6 @@ export class LiveClient {
       this.nextStartTime = 0;
     }
 
-    // Transcription Handling
     if (serverContent?.inputTranscription) {
         this.callbacks.onTranscript('user', serverContent.inputTranscription.text || '', false);
     }
@@ -323,24 +325,19 @@ export class LiveClient {
         const text = serverContent.outputTranscription.text || '';
         this.callbacks.onTranscript('model', text, false);
 
-        // Parse Tone Tag if present [TONE: ...]
         const toneMatch = text.match(/\[TONE:\s*([a-zA-Z]+)\]/);
         if (toneMatch && toneMatch[1] && this.callbacks.onToneChange) {
             const rawTone = toneMatch[1].toLowerCase();
             let mappedTone: Tone = 'neutral';
             if (rawTone.includes('warm') || rawTone.includes('calm')) mappedTone = 'warm';
-            else if (rawTone.includes('anxious') || rawTone.includes('tens') || rawTone.includes('fast')) mappedTone = 'anxious';
-            else if (rawTone.includes('encourag') || rawTone.includes('excit')) mappedTone = 'encouraging';
-            else if (rawTone.includes('assert') || rawTone.includes('confiden')) mappedTone = 'assertive';
+            else if (rawTone.includes('anxious') || rawTone.includes('tens')) mappedTone = 'anxious';
+            else if (rawTone.includes('encourag')) mappedTone = 'encouraging';
+            else if (rawTone.includes('assert')) mappedTone = 'assertive';
             
             this.callbacks.onToneChange(mappedTone);
         }
     }
-    if (serverContent?.turnComplete) {
-         // Could mark transcript as final here if we were aggregating parts
-    }
 
-    // Audio Handling
     const base64Audio = serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
     if (base64Audio && this.outputAudioContext) {
       try {
@@ -382,24 +379,21 @@ export class LiveClient {
   }
 
   private handleOnError(error: any) {
-    // If we are already disconnected, ignore errors
     if (this.status === LiveStatus.DISCONNECTED) return;
 
     let message = "Connection error";
     if (error instanceof Error) {
         message = error.message;
     } else if (typeof error === 'object' && error !== null) {
-        message = (error as any).message || "Network connection failed.";
+        message = (error as any).message || JSON.stringify(error) || "Network connection failed.";
     }
     
-    // Only log real errors, not close events
     if (!message.includes("closed") && !message.includes("aborted")) {
         console.error("Live Client Error Details:", error);
         this.stopAudioProcessing();
         this.updateStatus(LiveStatus.ERROR);
         this.callbacks.onError(new Error(message));
     } else {
-        // Treat as disconnect
         this.handleOnClose(new CloseEvent("close"));
     }
   }

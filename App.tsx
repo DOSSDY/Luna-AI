@@ -1,7 +1,11 @@
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { LiveClient } from './services/liveClient';
-import { LiveStatus, ChatMessage, Scenario, ScenarioType, AppView, UserProfile } from './types';
-import { SCENARIOS } from './constants';
+import { LiveStatus, ChatMessage, Scenario, ScenarioType, AppView, UserProfile, UserPreferences, Agent } from './types';
+import { SCENARIOS, AGENTS } from './constants';
+import { StorageService } from './services/storage';
+import { AnalysisService } from './services/analysisService';
+import { KnowledgeService } from './services/knowledgeService';
 import { Visualizer } from './components/Visualizer';
 import { ControlPanel } from './components/ControlPanel';
 import { Transcript } from './components/Transcript';
@@ -9,11 +13,14 @@ import { Sidebar } from './components/Sidebar';
 import { Recommendations } from './components/Recommendations';
 import { Profile } from './components/Profile';
 import { Login } from './components/Login';
+import { Onboarding } from './components/Onboarding';
+import { AgentSelector } from './components/AgentSelector';
 import { Sparkles, Video, VideoOff, BrainCircuit, PanelLeftOpen, PanelLeftClose, ScanEye, X, Loader2, Trophy, Target } from 'lucide-react';
 
 const App: React.FC = () => {
-  // Auth State
+  // Auth & User State
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   const [status, setStatus] = useState<LiveStatus>(LiveStatus.DISCONNECTED);
   const [inputVol, setInputVol] = useState(0);
@@ -24,9 +31,12 @@ const App: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [useCamera, setUseCamera] = useState(false);
   const [selectedScenario, setSelectedScenario] = useState<ScenarioType>('general');
+  const [selectedAgentId, setSelectedAgentId] = useState<string>(AGENTS[0].id);
   const [customGoal, setCustomGoal] = useState('');
   const [dynamicScenarios, setDynamicScenarios] = useState<Scenario[]>([]);
   const [videoAnalysis, setVideoAnalysis] = useState<{ loading: boolean; result: string | null }>({ loading: false, result: null });
+  const [isAnalyzingSession, setIsAnalyzingSession] = useState(false);
+
   const videoRef = useRef<HTMLVideoElement>(null);
 
   // Navigation State
@@ -35,11 +45,45 @@ const App: React.FC = () => {
   const [desktopMenuOpen, setDesktopMenuOpen] = useState(true);
 
   const liveClientRef = useRef<LiveClient | null>(null);
+  const analysisServiceRef = useRef<AnalysisService>(new AnalysisService());
 
-  // Load Dynamic Scenarios on User Login
+  // Load User from Storage on Mount
+  useEffect(() => {
+    const storedUser = StorageService.getUser();
+    if (storedUser) {
+      setUser(storedUser);
+      // Check if preferences are missing to show onboarding again (migration support)
+      if (!storedUser.preferences) setShowOnboarding(true);
+    }
+  }, []);
+
+  // Handle Login
+  const handleLogin = (loggedInUser: UserProfile) => {
+    // Check if we have a stored version of this user to preserve history
+    const stored = StorageService.getUser();
+    if (stored && stored.id === loggedInUser.id) {
+        setUser(stored);
+        if (!stored.preferences) setShowOnboarding(true);
+    } else {
+        setUser({ ...loggedInUser, history: [] }); // Initialize new history
+        setShowOnboarding(true); // New user needs onboarding
+        StorageService.saveUser({ ...loggedInUser, history: [] });
+    }
+  };
+
+  // Handle Onboarding Completion
+  const handleOnboardingComplete = (prefs: UserPreferences) => {
+    if (user) {
+        const updatedUser = { ...user, preferences: prefs };
+        setUser(updatedUser);
+        StorageService.saveUser(updatedUser);
+        setShowOnboarding(false);
+    }
+  };
+
+  // Load Dynamic Scenarios when User changes
   useEffect(() => {
     if (user && liveClientRef.current) {
-        // Attempt to generate tailored scenarios
         liveClientRef.current.generateTailoredScenarios(user.name)
             .then(scenarios => {
                 if (scenarios && scenarios.length > 0) {
@@ -94,7 +138,7 @@ const App: React.FC = () => {
             videoRef.current.play().catch(e => console.error("Video play error", e));
         }
     }
-  }, [status, useCamera, currentView]); // Re-attach if view changes back to call
+  }, [status, useCamera, currentView]);
 
   const handleConnect = useCallback(async (overrideScenarioId?: string) => {
     const targetScenarioId = overrideScenarioId || selectedScenario;
@@ -106,30 +150,64 @@ const App: React.FC = () => {
       setErrorMsg("API Key not found.");
       return;
     }
+
+    // Update status to Researching (shows UI loader)
+    setStatus(LiveStatus.RESEARCHING);
     
-    // Inject Scenario Prompt via System Instruction Extension
+    // 1. Resolve Scenario & Context
     const scenario = displayScenarios.find(s => s.id === targetScenarioId);
-    
-    let promptParts = [];
-    if (scenario && scenario.id !== 'general') {
-        promptParts.push(`User Scenario Selection: "${scenario.label}". Base Context: ${scenario.prompt}`);
-    }
+    let scenarioPrompt = scenario?.id !== 'general' ? `User Scenario: "${scenario?.label}". Context: ${scenario?.prompt}` : '';
     if (customGoal.trim()) {
-        promptParts.push(`User Specific Goal/Context: "${customGoal.trim()}"`);
+        scenarioPrompt += ` | User Goal: "${customGoal.trim()}"`;
     }
 
-    const scenarioPrompt = promptParts.length > 0 ? promptParts.join(' | ') : undefined;
+    // 2. Resolve Agent
+    const activeAgent = AGENTS.find(a => a.id === selectedAgentId) || AGENTS[0];
+
+    // 3. Resolve RAG Context (Hybrid Research Engine)
+    // We combine goal, scenario, and user focus areas to search the knowledge base or web
+    const focusAreas = user?.preferences?.focusAreas || [];
+    let ragContext = '';
+    
+    try {
+        ragContext = await KnowledgeService.findOrFetchContext(customGoal, scenario?.label || '', focusAreas);
+    } catch (e) {
+        console.error("Context retrieval failed", e);
+        // Fallback continues without context
+    }
 
     await liveClientRef.current?.connect({ 
         useVideo: useCamera,
-        scenarioPrompt
+        scenarioPrompt,
+        preferences: user?.preferences,
+        activeAgent,
+        ragContext
     });
     
-  }, [useCamera, selectedScenario, displayScenarios, customGoal]);
+  }, [useCamera, selectedScenario, displayScenarios, customGoal, user, selectedAgentId]);
 
   const handleDisconnect = useCallback(async () => {
     await liveClientRef.current?.disconnect();
-  }, []);
+    
+    // TRIGGER AUTO-ANALYSIS ON DISCONNECT
+    if (messages.length > 4) { // Only analyze significant conversations
+       setIsAnalyzingSession(true);
+       try {
+         const scenarioLabel = displayScenarios.find(s => s.id === selectedScenario)?.label || 'General';
+         const analysis = await analysisServiceRef.current.analyzeSession(messages, scenarioLabel);
+         
+         if (analysis) {
+             const updatedUser = StorageService.addSessionAnalysis(analysis);
+             if (updatedUser) setUser(updatedUser);
+         }
+       } catch(e) {
+           console.error("Analysis failed", e);
+       } finally {
+           setIsAnalyzingSession(false);
+       }
+    }
+
+  }, [messages, selectedScenario, displayScenarios]);
 
   const handleAnalyzeVideo = async () => {
     if (!videoRef.current || !liveClientRef.current) return;
@@ -240,10 +318,17 @@ const App: React.FC = () => {
                 </div>
             )}
 
-            {/* Scenario Selector & Custom Goal */}
+            {/* Configuration Panel (Agents & Scenarios) */}
             {status === LiveStatus.DISCONNECTED && (
-                <div className="w-full flex-none flex flex-col gap-4 mb-2 md:mb-6 animate-in fade-in slide-in-from-bottom-4 duration-700 w-full max-w-4xl z-20">
+                <div className="w-full flex-none flex flex-col gap-6 mb-2 md:mb-6 animate-in fade-in slide-in-from-bottom-4 duration-700 w-full max-w-4xl z-20 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
                     
+                    {/* Level 4: Agent Selector */}
+                    <AgentSelector 
+                        selectedAgentId={selectedAgentId} 
+                        onSelect={(agent) => setSelectedAgentId(agent.id)} 
+                    />
+
+                    {/* Scenario Selector */}
                     <div className="flex flex-col gap-2">
                          <div className="flex items-center justify-between px-1">
                             <span className="text-xs font-semibold text-stone-500 uppercase tracking-wider">Select a Focus (Optional)</span>
@@ -262,10 +347,6 @@ const App: React.FC = () => {
                                     {selectedScenario === s.id && <div className="absolute inset-0 bg-teal-500/5 pointer-events-none" />}
                                     <div className="font-medium text-sm md:text-base mb-1 relative z-10">{s.label}</div>
                                     <div className="text-xs opacity-60 truncate leading-tight relative z-10">{s.prompt}</div>
-                                    {/* Rendering hint if it exists */}
-                                    {(s as any).hint && (
-                                        <div className="text-[10px] text-teal-500/80 mt-1 font-medium relative z-10">{(s as any).hint}</div>
-                                    )}
                                 </button>
                             ))}
                         </div>
@@ -302,9 +383,14 @@ const App: React.FC = () => {
                 </div>
             )}
 
-            {/* Status Text */}
+            {/* Status Text / Analysis Loader */}
             <div className="flex-none h-6 flex items-center justify-center my-1 w-full">
-                {status === LiveStatus.CONNECTED ? (
+                {isAnalyzingSession ? (
+                    <span className="text-teal-400 text-sm font-medium animate-pulse flex items-center gap-2">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Generating Post-Session Report...
+                    </span>
+                ) : status === LiveStatus.CONNECTED ? (
                     <span className="text-teal-400/80 text-xs font-bold tracking-[0.2em] uppercase animate-pulse flex items-center justify-center gap-2">
                     <div className="w-2 h-2 rounded-full bg-teal-500 animate-ping" />
                     {selectedScenario === 'general' ? 'Live Session' : displayScenarios.find(s => s.id === selectedScenario)?.label} Active
@@ -421,12 +507,14 @@ const App: React.FC = () => {
   );
 
   if (!user) {
-    return <Login onLogin={setUser} />;
+    return <Login onLogin={handleLogin} />;
   }
 
   return (
-    <div className="flex h-[100dvh] bg-stone-900 font-sans text-stone-100 overflow-hidden">
+    <div className="flex h-[100dvh] bg-stone-900 font-sans text-stone-100 overflow-hidden relative">
       
+      {showOnboarding && <Onboarding onComplete={handleOnboardingComplete} />}
+
       {/* Sidebar */}
       <Sidebar 
         currentView={currentView} 
@@ -435,7 +523,7 @@ const App: React.FC = () => {
         onToggle={() => setMobileMenuOpen(!mobileMenuOpen)}
         desktopIsOpen={desktopMenuOpen}
         user={user}
-        onLogout={() => setUser(null)}
+        onLogout={() => { setUser(null); StorageService.clear(); }}
       />
 
       {/* Main Content Area */}

@@ -1,5 +1,6 @@
+
 import React from 'react';
-import { Mic, Square, Loader2 } from 'lucide-react';
+import { Mic, Square, Loader2, Sparkles } from 'lucide-react';
 import { LiveStatus } from '../types';
 
 interface ControlPanelProps {
@@ -9,13 +10,27 @@ interface ControlPanelProps {
 }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({ status, onConnect, onDisconnect }) => {
+  if (status === LiveStatus.RESEARCHING) {
+      return (
+        <div className="flex flex-col items-center gap-4">
+          <button disabled className="bg-stone-800 text-teal-400 rounded-full p-6 transition-all border border-teal-500/30">
+            <Sparkles className="w-8 h-8 animate-pulse" />
+          </button>
+          <div className="flex flex-col items-center">
+             <p className="text-teal-400 text-sm font-medium tracking-wide animate-pulse">Researching Strategy...</p>
+             <p className="text-stone-600 text-xs mt-1">Scanning psychology database</p>
+          </div>
+        </div>
+      );
+  }
+
   if (status === LiveStatus.CONNECTING) {
     return (
       <div className="flex flex-col items-center gap-4">
         <button disabled className="bg-stone-700 text-stone-400 rounded-full p-6 transition-all">
           <Loader2 className="w-8 h-8 animate-spin" />
         </button>
-        <p className="text-stone-400 text-sm tracking-wide animate-pulse">Connecting to PsySense...</p>
+        <p className="text-stone-400 text-sm tracking-wide animate-pulse">Connecting to Luna...</p>
       </div>
     );
   }

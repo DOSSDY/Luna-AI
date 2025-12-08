@@ -53,6 +53,12 @@ export const Visualizer: React.FC<VisualizerProps> = ({ inputVolume, outputVolum
     let time = 0;
 
     const animate = () => {
+      // Guard against 0-dimension canvas (prevents math errors)
+      if (canvas.width === 0 || canvas.height === 0) {
+        requestRef.current = requestAnimationFrame(animate);
+        return;
+      }
+
       // Use refs for current values
       const volIn = inputVolRef.current;
       const volOut = outputVolRef.current;
@@ -106,6 +112,8 @@ export const Visualizer: React.FC<VisualizerProps> = ({ inputVolume, outputVolum
       const r = Math.round(currentR.current);
       const g = Math.round(currentG.current);
       const b = Math.round(currentB.current);
+      
+      // FIX: Ensure radius is never negative
       const radius = Math.max(0, currentRadius.current);
 
       const gradient = ctx.createRadialGradient(centerX, centerY, radius * 0.2, centerX, centerY, radius);
@@ -123,12 +131,13 @@ export const Visualizer: React.FC<VisualizerProps> = ({ inputVolume, outputVolum
         ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${ringOpacity})`;
         ctx.lineWidth = 2;
         
-        const ringRadius1 = radius + (minDim * 0.05) + Math.sin(time * 1.5) * 10;
+        // FIX: Ensure ring radii are never negative
+        const ringRadius1 = Math.max(0, radius + (minDim * 0.05) + Math.sin(time * 1.5) * 10);
         ctx.beginPath();
         ctx.arc(centerX, centerY, ringRadius1, 0, Math.PI * 2);
         ctx.stroke();
 
-        const ringRadius2 = radius + (minDim * 0.1) + Math.cos(time * 1.2) * 10;
+        const ringRadius2 = Math.max(0, radius + (minDim * 0.1) + Math.cos(time * 1.2) * 10);
         ctx.beginPath();
         ctx.arc(centerX, centerY, ringRadius2, 0, Math.PI * 2);
         ctx.stroke();

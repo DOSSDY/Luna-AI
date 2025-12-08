@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { UserProfile } from '../types';
 import { MessageCircleHeart, Loader2 } from 'lucide-react';
@@ -19,7 +18,8 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
         id: '1029384756',
         name: 'Alex Taylor',
         email: 'alex.taylor@example.com',
-        avatarUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Alex&backgroundColor=b6e3f4'
+        avatarUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Alex&backgroundColor=b6e3f4',
+        history: []
       };
       onLogin(mockUser);
       setIsLoading(false);
