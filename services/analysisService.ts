@@ -1,19 +1,16 @@
 
 import { GoogleGenAI, Type } from '@google/genai';
-import { ChatMessage, SessionAnalysis, Agent } from '../types';
+import { ChatMessage, SessionAnalysis, Agent, ServiceTier } from '../types';
 
 export class AnalysisService {
-  private ai: GoogleGenAI;
-
-  constructor() {
-    this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  }
+  // Removed constructor property to allow dynamic instantiation
 
   /**
    * Analyzes a set of messages to produce structured scoring metrics.
    * Now agent-aware: The active agent critiques the session based on their specific values.
    */
-  public async analyzeSession(messages: ChatMessage[], topic: string, agent?: Agent): Promise<SessionAnalysis | null> {
+  public async analyzeSession(messages: ChatMessage[], topic: string, agent?: Agent, tier: ServiceTier = 'standard'): Promise<SessionAnalysis | null> {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const userMessages = messages.filter(m => m.role === 'user').map(m => m.text).join('\n');
     
     if (!userMessages.trim()) return null;
@@ -23,9 +20,14 @@ export class AnalysisService {
     const persona = agent?.name || 'The Coach';
     const perspective = agent?.stylePrompt || 'You are a neutral communication coach.';
 
+    // Select Model based on Tier
+    // Premium: High Reasoning Model (Gemini 3 Pro Preview)
+    // Standard: Faster Model (Gemini 2.5 Flash) - Updated from deprecated 1.5
+    const modelName = tier === 'premium' ? 'gemini-3-pro-preview' : 'gemini-2.5-flash';
+
     try {
-      const response = await this.ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+      const response = await ai.models.generateContent({
+        model: modelName,
         contents: `
           Roleplay: ${perspective}
           

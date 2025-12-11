@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { LiveClient } from './services/liveClient';
-import { LiveStatus, ChatMessage, Scenario, ScenarioType, AppView, UserProfile, UserPreferences, Agent, Language, KnowledgeAsset } from './types';
+import { LiveStatus, ChatMessage, Scenario, ScenarioType, AppView, UserProfile, UserPreferences, Agent, Language, KnowledgeAsset, ServiceTier } from './types';
 import { SCENARIOS, AGENTS, getTranslation, getLocalizedAgents, getLocalizedScenarios } from './constants';
 import { StorageService } from './services/storage';
 import { AnalysisService } from './services/analysisService';
@@ -16,6 +16,7 @@ import { Login } from './components/Login';
 import { Onboarding } from './components/Onboarding';
 import { AgentSelector } from './components/AgentSelector';
 import { ContextManager } from './components/ContextManager';
+import { TierSelector } from './components/TierSelector';
 import { Sparkles, Video, VideoOff, BrainCircuit, PanelLeftOpen, PanelLeftClose, ScanEye, X, Loader2, Trophy, Target, Globe, Key } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -23,8 +24,9 @@ const App: React.FC = () => {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
 
-  // Localization State
+  // Localization & Tier State
   const [language, setLanguage] = useState<Language>('en');
+  const [serviceTier, setServiceTier] = useState<ServiceTier>('standard');
 
   const [status, setStatus] = useState<LiveStatus>(LiveStatus.DISCONNECTED);
   const [inputVol, setInputVol] = useState(0);
@@ -40,8 +42,6 @@ const App: React.FC = () => {
   const [dynamicScenarios, setDynamicScenarios] = useState<Scenario[]>([]);
   const [videoAnalysis, setVideoAnalysis] = useState<{ loading: boolean; result: string | null }>({ loading: false, result: null });
   const [isAnalyzingSession, setIsAnalyzingSession] = useState(false);
-
-  // Level 5: Knowledge Assets (User Context)
   const [knowledgeAssets, setKnowledgeAssets] = useState<KnowledgeAsset[]>([]);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -59,22 +59,22 @@ const App: React.FC = () => {
     const storedUser = StorageService.getUser();
     if (storedUser) {
       setUser(storedUser);
+      setKnowledgeAssets(storedUser.knowledgeAssets || []);
       // Check if preferences are missing to show onboarding again (migration support)
       if (!storedUser.preferences) setShowOnboarding(true);
-      // Load assets if present
-      if (storedUser.knowledgeAssets) setKnowledgeAssets(storedUser.knowledgeAssets);
     }
   }, []);
 
   // Handle Login
-  const handleLogin = (loggedInUser: UserProfile, lang: Language) => {
+  const handleLogin = (loggedInUser: UserProfile, lang: Language, tier: ServiceTier) => {
     setLanguage(lang);
+    setServiceTier(tier);
     // Check if we have a stored version of this user to preserve history
     const stored = StorageService.getUser();
     if (stored && stored.id === loggedInUser.id) {
         setUser(stored);
-        if (stored.knowledgeAssets) setKnowledgeAssets(stored.knowledgeAssets);
         if (!stored.preferences) setShowOnboarding(true);
+        if (stored.knowledgeAssets) setKnowledgeAssets(stored.knowledgeAssets);
     } else {
         setUser({ ...loggedInUser, history: [] }); // Initialize new history
         setShowOnboarding(true); // New user needs onboarding
@@ -92,7 +92,7 @@ const App: React.FC = () => {
     }
   };
 
-  // Update Assets & Persist
+  // Update Assets Logic
   const handleUpdateAssets = (newAssets: KnowledgeAsset[]) => {
       setKnowledgeAssets(newAssets);
       if (user) {
@@ -202,7 +202,8 @@ const App: React.FC = () => {
     let ragContext = '';
     
     try {
-        ragContext = await KnowledgeService.findOrFetchContext(customGoal, scenario?.label || '', focusAreas);
+        // Pass serviceTier to knowledge service to avoid billing calls if Standard
+        ragContext = await KnowledgeService.findOrFetchContext(customGoal, scenario?.label || '', focusAreas, serviceTier);
     } catch (e) {
         console.error("Context retrieval failed", e);
     }
@@ -214,10 +215,11 @@ const App: React.FC = () => {
         activeAgent,
         ragContext,
         language,
-        knowledgeAssets // Pass active text assets to the model
+        knowledgeAssets: knowledgeAssets.filter(a => a.isActive),
+        serviceTier
     });
     
-  }, [useCamera, selectedScenario, displayScenarios, customGoal, user, selectedAgentId, language, localizedAgents, knowledgeAssets]);
+  }, [useCamera, selectedScenario, displayScenarios, customGoal, user, selectedAgentId, language, localizedAgents, knowledgeAssets, serviceTier]);
 
   const handleDisconnect = useCallback(async () => {
     await liveClientRef.current?.disconnect();
@@ -229,7 +231,8 @@ const App: React.FC = () => {
          const scenarioLabel = displayScenarios.find(s => s.id === selectedScenario)?.label || 'General';
          const activeAgent = localizedAgents.find(a => a.id === selectedAgentId);
          
-         const analysis = await analysisServiceRef.current.analyzeSession(messages, scenarioLabel, activeAgent);
+         // Pass serviceTier for analysis model selection
+         const analysis = await analysisServiceRef.current.analyzeSession(messages, scenarioLabel, activeAgent, serviceTier);
          
          if (analysis) {
              const updatedUser = StorageService.addSessionAnalysis(analysis);
@@ -242,7 +245,7 @@ const App: React.FC = () => {
        }
     }
 
-  }, [messages, selectedScenario, displayScenarios, selectedAgentId, localizedAgents]);
+  }, [messages, selectedScenario, displayScenarios, selectedAgentId, localizedAgents, serviceTier]);
 
   const handleAnalyzeVideo = async () => {
     if (!videoRef.current || !liveClientRef.current) return;
@@ -258,7 +261,7 @@ const App: React.FC = () => {
             ctx.drawImage(videoRef.current, 0, 0);
             const base64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
             
-            const result = await liveClientRef.current.analyzeVideoSnapshot(base64);
+            const result = await liveClientRef.current.analyzeVideoSnapshot(base64, serviceTier);
             setVideoAnalysis({ loading: false, result });
         }
     } catch (e) {
@@ -301,6 +304,11 @@ const App: React.FC = () => {
                     </span>
                 </div>
                 <div className="flex gap-2 items-center">
+                    {/* Tier Selector */}
+                    {status === LiveStatus.DISCONNECTED && (
+                        <TierSelector tier={serviceTier} onChange={setServiceTier} language={language} variant="header" />
+                    )}
+
                     {/* Language Toggle */}
                     <button
                         onClick={() => setLanguage(prev => prev === 'en' ? 'th' : 'en')}
@@ -347,16 +355,16 @@ const App: React.FC = () => {
             )}
         </div>
 
-        {/* Main Content Area - Strictly Flexible with min-h-0 to prevent overflow */}
+        {/* Main Content Area */}
         <div className="flex-1 flex flex-col items-center justify-center w-full z-10 px-4 min-h-0 relative">
             
             {/* Top Spacer */}
-            <div className="flex-[0.5]" />
+            <div className="flex-[0.2]" />
 
             {/* Intro Header */}
             {status === LiveStatus.DISCONNECTED && (
                 <div className="w-full flex flex-col items-center text-center mb-6 animate-in fade-in slide-in-from-bottom-3 duration-700">
-                    <h2 className="text-2xl md:text-3xl font-semibold text-stone-100 mb-2 tracking-tight">
+                    <h2 className="text-2xl md:text-3xl font-semibold text-stone-100 mb-1 tracking-tight">
                         {getTranslation(language, 'anything_luna_know')}
                     </h2>
                     <p className="text-stone-400 text-sm md:text-base font-light">
@@ -365,77 +373,63 @@ const App: React.FC = () => {
                 </div>
             )}
 
-            {/* Configuration Panel (Agents & Scenarios) */}
+            {/* CONFIGURATION PANEL (CLEANED UP) */}
             {status === LiveStatus.DISCONNECTED && (
-                <div className="w-full flex-none flex flex-col gap-6 mb-2 md:mb-6 animate-in fade-in slide-in-from-bottom-4 duration-700 w-full max-w-4xl z-20 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
+                <div className="w-full max-w-2xl flex flex-col gap-4 animate-in fade-in slide-in-from-bottom-4 duration-700 z-20">
                     
-                    {/* Level 4: Agent Selector */}
-                    <AgentSelector 
-                        selectedAgentId={selectedAgentId} 
-                        onSelect={(agent) => setSelectedAgentId(agent.id)}
-                        localizedAgents={localizedAgents}
-                        language={language}
-                    />
-
-                    {/* Scenario Selector */}
+                    {/* Agent Section */}
                     <div className="flex flex-col gap-2">
-                         <div className="flex items-center justify-between px-1">
-                            <span className="text-xs font-semibold text-stone-500 uppercase tracking-wider">
-                              {getTranslation(language, 'select_focus')}
-                            </span>
-                        </div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                            {displayScenarios.map((s) => (
-                                <button
-                                    key={s.id}
-                                    onClick={() => setSelectedScenario(prev => prev === s.id ? 'general' : s.id as ScenarioType)}
-                                    className={`p-3 md:p-4 rounded-xl text-left text-sm transition-all border relative overflow-hidden group ${
-                                        selectedScenario === s.id 
-                                        ? 'bg-stone-800 border-teal-500/50 text-teal-100 shadow-lg shadow-teal-900/20' 
-                                        : 'bg-stone-800/40 border-stone-800 text-stone-400 hover:bg-stone-800 hover:text-stone-200'
-                                    }`}
-                                >
-                                    {selectedScenario === s.id && <div className="absolute inset-0 bg-teal-500/5 pointer-events-none" />}
-                                    <div className="font-medium text-sm md:text-base mb-1 relative z-10">{s.label}</div>
-                                    <div className="text-xs opacity-60 truncate leading-tight relative z-10">{s.prompt}</div>
-                                </button>
-                            ))}
-                        </div>
+                        <AgentSelector 
+                            selectedAgentId={selectedAgentId} 
+                            onSelect={(agent) => setSelectedAgentId(agent.id)}
+                            localizedAgents={localizedAgents}
+                            language={language}
+                        />
                     </div>
 
-                    {/* Custom Goal Input */}
-                     <div className="w-full">
-                         <div className="relative group">
-                            <input
-                                type="text"
-                                value={customGoal}
-                                onChange={(e) => setCustomGoal(e.target.value)}
-                                placeholder={
-                                    selectedScenario === 'general' 
-                                    ? getTranslation(language, 'custom_goal_placeholder') 
-                                    : `${getTranslation(language, 'custom_goal_context_placeholder')}${displayScenarios.find(s => s.id === selectedScenario)?.label}...`
-                                }
-                                className="w-full bg-stone-800/40 border border-stone-800 rounded-xl px-4 py-3 pl-10 text-stone-200 placeholder-stone-500 focus:outline-none focus:border-teal-500/50 focus:bg-stone-800 transition-all text-sm shadow-inner"
-                            />
-                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-600 group-focus-within:text-teal-500 transition-colors">
-                                <Target className="w-4 h-4" />
+                    {/* Scenario & Goals Group */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        
+                        {/* Scenario Picker */}
+                         <div className="flex flex-col gap-2">
+                            <span className="text-xs font-semibold text-stone-500 uppercase tracking-wider px-1">Scenario Context</span>
+                             <div className="grid grid-cols-2 gap-2">
+                                {displayScenarios.slice(0, 4).map((s) => (
+                                    <button
+                                        key={s.id}
+                                        onClick={() => setSelectedScenario(prev => prev === s.id ? 'general' : s.id as ScenarioType)}
+                                        className={`p-2 rounded-lg text-left text-xs transition-all border relative overflow-hidden ${
+                                            selectedScenario === s.id 
+                                            ? 'bg-stone-800 border-teal-500/30 text-teal-100' 
+                                            : 'bg-stone-800/30 border-transparent text-stone-400 hover:bg-stone-800/50'
+                                        }`}
+                                    >
+                                        <div className="font-medium truncate">{s.label}</div>
+                                    </button>
+                                ))}
                             </div>
-                            {customGoal && (
-                                <button 
-                                    onClick={() => setCustomGoal('')}
-                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-500 hover:text-white p-1"
-                                >
-                                    <X className="w-3 h-3" />
-                                </button>
-                            )}
+                         </div>
+
+                         {/* Goal Input */}
+                         <div className="flex flex-col gap-2">
+                            <span className="text-xs font-semibold text-stone-500 uppercase tracking-wider px-1">Specific Goal</span>
+                            <div className="relative">
+                                <input
+                                    type="text"
+                                    value={customGoal}
+                                    onChange={(e) => setCustomGoal(e.target.value)}
+                                    placeholder={getTranslation(language, 'custom_goal_placeholder')}
+                                    className="w-full bg-stone-900/40 border border-stone-800 rounded-lg px-3 py-2.5 pl-9 text-stone-200 placeholder-stone-600 focus:outline-none focus:border-teal-500/40 focus:bg-stone-900/60 transition-all text-sm"
+                                />
+                                <Target className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-600 w-4 h-4" />
+                            </div>
                         </div>
                     </div>
-
                 </div>
             )}
 
             {/* Status Text / Analysis Loader */}
-            <div className="flex-none h-6 flex items-center justify-center my-1 w-full">
+            <div className="flex-none h-6 flex items-center justify-center my-2 w-full">
                 {isAnalyzingSession ? (
                     <span className="text-teal-400 text-sm font-medium animate-pulse flex items-center gap-2">
                         <Loader2 className="w-4 h-4 animate-spin" />
@@ -447,9 +441,9 @@ const App: React.FC = () => {
                     {getTranslation(language, 'live_session_active')}
                     </span>
                 ) : status === LiveStatus.ERROR ? (
-                   <div className="flex items-center gap-3">
+                   <div className="flex items-center gap-3 bg-red-950/30 px-4 py-1.5 rounded-full border border-red-900/50 animate-in fade-in">
                      <span className="text-red-400 text-sm font-medium">{errorMsg}</span>
-                     {errorMsg?.includes('Caller does not have permission') && (
+                     {errorMsg?.includes('permission') && (
                        <button 
                          onClick={() => (window as any).aistudio.openSelectKey()}
                          className="flex items-center gap-1 bg-red-900/30 text-red-300 px-3 py-1 rounded-full text-xs hover:bg-red-900/50 border border-red-800 transition-colors"
@@ -462,7 +456,7 @@ const App: React.FC = () => {
                 ) : null}
             </div>
 
-            {/* Visualizer & Video Stack - Flexible */}
+            {/* Visualizer & Video Stack */}
             <div className={`w-full flex items-center justify-center relative transition-all duration-500 min-h-0 ${status === LiveStatus.CONNECTED ? 'flex-[2]' : 'flex-1'}`}>
                 <Visualizer 
                     inputVolume={inputVol} 
@@ -470,25 +464,25 @@ const App: React.FC = () => {
                     isActive={status === LiveStatus.CONNECTED}
                 />
                 
-                {/* Camera Preview PIP with Video Analysis */}
+                {/* Camera Preview PIP */}
                 {status === LiveStatus.CONNECTED && useCamera && (
-                    <div className="absolute bottom-0 right-4 w-32 h-24 md:w-56 md:h-40 bg-stone-950 rounded-lg overflow-hidden border border-stone-800 shadow-2xl z-20 group">
+                    <div className="absolute top-4 right-4 md:bottom-4 md:right-4 md:top-auto w-32 h-24 md:w-56 md:h-40 bg-stone-950 rounded-lg overflow-hidden border border-stone-800 shadow-2xl z-20 group">
                         <video ref={videoRef} className="w-full h-full object-cover transform scale-x-[-1]" autoPlay muted playsInline />
                         
-                        {/* Analysis Trigger Overlay */}
+                        {/* Analysis Overlay */}
                         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                             <button 
                                 onClick={handleAnalyzeVideo}
                                 className="bg-teal-600/90 hover:bg-teal-500 text-white p-2 rounded-full shadow-lg transform transition-transform hover:scale-110"
-                                title="Analyze Body Language (Gemini Pro)"
+                                title="Analyze Body Language (AI Vision)"
                             >
                                 <ScanEye className="w-5 h-5" />
                             </button>
                         </div>
-
-                        {/* Analysis Result Overlay */}
+                        
+                        {/* Results Overlay */}
                         {(videoAnalysis.loading || videoAnalysis.result) && (
-                            <div className="absolute inset-0 bg-stone-900/95 p-3 overflow-y-auto animate-in fade-in duration-300">
+                            <div className="absolute inset-0 bg-stone-900/95 p-3 overflow-y-auto animate-in fade-in duration-300 custom-scrollbar">
                                 {videoAnalysis.loading ? (
                                     <div className="flex flex-col items-center justify-center h-full text-teal-400">
                                         <Loader2 className="w-6 h-6 animate-spin mb-2" />
@@ -523,7 +517,7 @@ const App: React.FC = () => {
                  </div>
             )}
 
-            {/* Call to Action Helper Text */}
+            {/* Call to Action Text */}
             {status === LiveStatus.DISCONNECTED && (
                 <div className="flex-none text-center text-stone-500 text-sm max-w-[280px] leading-relaxed mt-4 animate-in fade-in slide-in-from-bottom-2 delay-300">
                     <p className="mb-4">
@@ -531,19 +525,13 @@ const App: React.FC = () => {
                             ? getTranslation(language, 'tap_mic_general')
                             : getTranslation(language, 'tap_mic_context')}
                     </p>
-                    <div className="flex justify-center gap-4 opacity-50">
-                        <BrainCircuit className="w-6 h-6" />
-                        <Video className="w-6 h-6" />
-                    </div>
                 </div>
             )}
             
-            {/* Bottom Spacer */}
             <div className="flex-[0.5]" />
-
         </div>
 
-        {/* Footer Controls - Fixed height in flex flow */}
+        {/* Footer Controls */}
         <div className="flex-none z-20 w-full py-4 md:py-8 flex justify-center bg-gradient-to-t from-stone-900 to-transparent">
             <ControlPanel 
                 status={status} 
@@ -568,18 +556,20 @@ const App: React.FC = () => {
                 {currentView === 'recommendations' 
                     ? getTranslation(language, 'nav_recs') 
                     : currentView === 'context'
-                    ? getTranslation(language, 'nav_context')
+                    ? getTranslation(language, 'context_hub')
                     : getTranslation(language, 'nav_profile')}
             </span>
           </div>
-          {/* Language Toggle for Secondary Views */}
-          <button
-                onClick={() => setLanguage(prev => prev === 'en' ? 'th' : 'en')}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-stone-800 text-stone-300 hover:bg-stone-700 hover:text-white transition-all text-xs font-bold tracking-wide border border-stone-700"
-          >
-                <Globe className="w-3.5 h-3.5" />
-                {language === 'en' ? 'EN' : 'TH'}
-          </button>
+          <div className="flex items-center gap-3">
+            {/* Language Toggle for Secondary Views */}
+            <button
+                    onClick={() => setLanguage(prev => prev === 'en' ? 'th' : 'en')}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-stone-800 text-stone-300 hover:bg-stone-700 hover:text-white transition-all text-xs font-bold tracking-wide border border-stone-700"
+            >
+                    <Globe className="w-3.5 h-3.5" />
+                    {language === 'en' ? 'EN' : 'TH'}
+            </button>
+          </div>
       </div>
   );
 
@@ -628,12 +618,12 @@ const App: React.FC = () => {
 
         {currentView === 'context' && (
             <div className="h-full flex flex-col overflow-y-auto relative z-10">
-                {renderSecondaryHeader()}
-                <ContextManager 
-                    assets={knowledgeAssets} 
-                    onUpdateAssets={handleUpdateAssets} 
-                    language={language}
-                />
+               {renderSecondaryHeader()}
+               <ContextManager 
+                  assets={knowledgeAssets} 
+                  onUpdate={handleUpdateAssets} 
+                  language={language}
+               />
             </div>
         )}
       </main>

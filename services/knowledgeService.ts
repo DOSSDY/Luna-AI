@@ -1,13 +1,13 @@
 
 import { GoogleGenAI } from '@google/genai';
 import { KNOWLEDGE_LIBRARY } from '../data/knowledgeBase';
-import { KnowledgeSnippet } from '../types';
+import { KnowledgeSnippet, ServiceTier } from '../types';
 
 // Simple in-memory cache to avoid re-embedding the static library every time
 let libraryEmbeddingsCache: { id: string; embedding: number[] }[] | null = null;
 
 export class KnowledgeService {
-  private static ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  // Removed static instance to ensure fresh key usage
 
   /**
    * Calculates Cosine Similarity between two vectors.
@@ -22,17 +22,17 @@ export class KnowledgeService {
 
   /**
    * Generates embeddings for the static library. 
-   * In a production app, these would be pre-calculated and stored in a DB.
    */
   private static async getLibraryEmbeddings(): Promise<{ id: string; embedding: number[] }[]> {
     if (libraryEmbeddingsCache) return libraryEmbeddingsCache;
 
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
     // We process these in parallel
     const promises = KNOWLEDGE_LIBRARY.map(async (snippet) => {
-      // We embed the title + tags + content for a rich semantic representation
       const textToEmbed = `${snippet.title} ${snippet.tags.join(' ')}: ${snippet.content}`;
       
-      const result = await this.ai.models.embedContent({
+      const result = await ai.models.embedContent({
         model: 'text-embedding-004',
         contents: { parts: [{ text: textToEmbed }] }
       });
@@ -83,15 +83,15 @@ export class KnowledgeService {
   }
 
   /**
-   * Semantic RAG with Keyword Boosting:
-   * Uses Vector Embeddings + Keyword Overlap to find the most relevant context.
+   * Semantic RAG with Keyword Boosting
    */
   public static async getSemanticContext(userGoal: string, scenarioId: string, tags: string[] = []): Promise<string> {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     try {
       // 1. Construct and Embed the Query
       const queryText = `Goal: ${userGoal}. Scenario: ${scenarioId}. Focus: ${tags.join(', ')}`;
       
-      const queryResult = await this.ai.models.embedContent({
+      const queryResult = await ai.models.embedContent({
         model: 'text-embedding-004',
         contents: { parts: [{ text: queryText }] }
       });
@@ -133,16 +133,17 @@ export class KnowledgeService {
   /**
    * Hybrid Research:
    * 1. Vector Search + Keyword Boosting (Local DB).
-   * 2. If relevance is low, use Google Search.
+   * 2. If relevance is low, use Google Search (ONLY if Premium).
    */
-  public static async findOrFetchContext(userGoal: string, scenarioId: string, tags: string[] = []): Promise<string> {
+  public static async findOrFetchContext(userGoal: string, scenarioId: string, tags: string[] = [], tier: ServiceTier = 'standard'): Promise<string> {
       let topLocalMatches: any[] = [];
       let queryEmbedding: number[] | undefined;
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
       // 1. Local Hybrid Search
       try {
         const queryText = `Goal: ${userGoal}. Scenario: ${scenarioId}`;
-        const queryResult = await this.ai.models.embedContent({
+        const queryResult = await ai.models.embedContent({
             model: 'text-embedding-004',
             contents: { parts: [{ text: queryText }] }
         });
@@ -172,42 +173,44 @@ export class KnowledgeService {
           console.warn("Embedding check failed", e);
       }
 
-      // 2. Web Research (if local wasn't good enough)
-      try {
-        const searchPrompt = `
-            User Goal: "${userGoal || 'Improve communication'}"
-            Scenario: "${scenarioId}"
-            Focus Areas: "${tags.join(', ')}"
-            
-            Find a recognized psychological framework, communication technique, or negotiation strategy that specifically addresses this situation.
-            Explain the steps briefly for a real-time coach to use. 
-            Do not just give generic advice; name a specific method (e.g., "The XYZ Technique").
-        `;
+      // 2. Web Research (ONLY FOR PREMIUM)
+      if (tier === 'premium') {
+        try {
+            const searchPrompt = `
+                User Goal: "${userGoal || 'Improve communication'}"
+                Scenario: "${scenarioId}"
+                Focus Areas: "${tags.join(', ')}"
+                
+                Find a recognized psychological framework, communication technique, or negotiation strategy that specifically addresses this situation.
+                Explain the steps briefly for a real-time coach to use. 
+                Do not just give generic advice; name a specific method (e.g., "The XYZ Technique").
+            `;
 
-        const response = await this.ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: searchPrompt,
-            config: {
-                tools: [{ googleSearch: {} }],
-                systemInstruction: "You are a specialized research assistant. Find a named communication framework. Output: FRAMEWORK NAME, then bullet points of steps."
+            const response = await ai.models.generateContent({
+                model: 'gemini-2.5-flash',
+                contents: searchPrompt,
+                config: {
+                    tools: [{ googleSearch: {} }],
+                    systemInstruction: "You are a specialized research assistant. Find a named communication framework. Output: FRAMEWORK NAME, then bullet points of steps."
+                }
+            });
+
+            if (response.text) {
+                const grounding = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+                let sourceInfo = '';
+                
+                if (grounding && grounding.length > 0) {
+                    const webChunk = grounding.find(c => c.web);
+                    if (webChunk?.web?.title) {
+                        sourceInfo = `(Source: ${webChunk.web.title})`;
+                    }
+                }
+
+                return `RESEARCHED FRAMEWORK ${sourceInfo}:\n${response.text}`;
             }
-        });
-
-        if (response.text) {
-             const grounding = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
-             let sourceInfo = '';
-             
-             if (grounding && grounding.length > 0) {
-                 const webChunk = grounding.find(c => c.web);
-                 if (webChunk?.web?.title) {
-                     sourceInfo = `(Source: ${webChunk.web.title})`;
-                 }
-             }
-
-             return `RESEARCHED FRAMEWORK ${sourceInfo}:\n${response.text}`;
+        } catch (e) {
+            console.warn("Web research failed.", e);
         }
-      } catch (e) {
-          console.warn("Web research failed.", e);
       }
 
       // 3. Fallback to Local (whatever we found)

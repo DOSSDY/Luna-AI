@@ -7,6 +7,8 @@ export enum LiveStatus {
   ERROR = 'error',
 }
 
+export type ServiceTier = 'standard' | 'premium';
+
 export interface AudioVolumeState {
   inputVolume: number;
   outputVolume: number;
@@ -55,9 +57,10 @@ export interface KnowledgeSnippet {
 export interface KnowledgeAsset {
   id: string;
   name: string;
-  type: 'text'; // Future: 'pdf' | 'doc'
+  type: 'text' | 'file';
   content: string;
   isActive: boolean;
+  fileName?: string;
 }
 
 export type AppView = 'call' | 'recommendations' | 'profile' | 'context';

@@ -2,7 +2,7 @@
 import { GoogleGenAI, LiveServerMessage, Modality, Type } from '@google/genai';
 import { SYSTEM_INSTRUCTION_BASE } from '../constants';
 import { createAudioBlob, base64ToArrayBuffer, int16ToFloat32 } from './audioUtils';
-import { LiveStatus, Scenario, Tone, UserPreferences, Agent, Language, KnowledgeAsset, UserProfile } from '../types';
+import { LiveStatus, Scenario, Tone, UserPreferences, Agent, Language, KnowledgeAsset, ServiceTier } from '../types';
 
 interface LiveClientCallbacks {
   onStatusChange: (status: LiveStatus) => void;
@@ -21,6 +21,7 @@ interface ConnectConfig {
     ragContext?: string;
     language?: Language;
     knowledgeAssets?: KnowledgeAsset[];
+    serviceTier?: ServiceTier;
 }
 
 export class LiveClient {
@@ -37,6 +38,7 @@ export class LiveClient {
   private activeSources: Set<AudioBufferSourceNode> = new Set();
   private callbacks: LiveClientCallbacks;
   private sessionPromise: Promise<any> | null = null;
+  private disconnectExpected: boolean = false;
   
   // Analysers for visualization
   private inputAnalyser: AnalyserNode | null = null;
@@ -49,6 +51,7 @@ export class LiveClient {
   }
 
   public async connect(config: ConnectConfig) {
+    this.disconnectExpected = false;
     this.stopAudioProcessing(); // Clean start
     
     if (this.status === LiveStatus.CONNECTING || this.status === LiveStatus.CONNECTED) {
@@ -57,6 +60,8 @@ export class LiveClient {
 
     try {
       this.updateStatus(LiveStatus.CONNECTING);
+      
+      // Re-initialize to ensure latest API key if it changed
       this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
       // 1. Audio Stream
@@ -91,11 +96,10 @@ export class LiveClient {
       // --- CONSTRUCT SYSTEM INSTRUCTION ---
       let effectiveSystemInstruction = SYSTEM_INSTRUCTION_BASE;
 
-      // 1. Agent Persona & Directives (Level 4 - Enhanced)
+      // 1. Agent Persona & Directives
       if (config.activeAgent) {
         effectiveSystemInstruction += `\n\n=== IDENTITY & PERSONA ===\n${config.activeAgent.stylePrompt}\n`;
         
-        // Inject Hidden Directives for Agentic Behavior
         if (config.activeAgent.hiddenDirectives?.length) {
              effectiveSystemInstruction += `\n\n*** CRITICAL BEHAVIORAL OVERRIDES ***\nYou must strictly adhere to these operational rules, overriding standard politeness if necessary:\n`;
              config.activeAgent.hiddenDirectives.forEach(d => {
@@ -111,24 +115,20 @@ export class LiveClient {
         effectiveSystemInstruction += `\n\nLANGUAGE SETTING: Speak in English.`;
       }
 
-      // 3. RAG Context (Level 3)
+      // 3. User Knowledge Assets (Context Hub)
+      if (config.knowledgeAssets && config.knowledgeAssets.length > 0) {
+        effectiveSystemInstruction += `\n\n=== USER PROVIDED CONTEXT (Memorize This) ===\nThe user has provided the following documents/notes. Use them to inform your answers.\n`;
+        config.knowledgeAssets.forEach(asset => {
+             effectiveSystemInstruction += `\n--- DOCUMENT: ${asset.name} ---\n${asset.content}\n----------------\n`;
+        });
+      }
+
+      // 4. RAG Context
       if (config.ragContext) {
         effectiveSystemInstruction += `\n\n=== PSYCHOLOGICAL FRAMEWORK (Use if relevant) ===\n${config.ragContext}\n`;
       }
 
-      // 4. User Provided Context (Level 5 - Files/Scripts)
-      if (config.knowledgeAssets && config.knowledgeAssets.length > 0) {
-          const activeAssets = config.knowledgeAssets.filter(a => a.isActive);
-          if (activeAssets.length > 0) {
-              effectiveSystemInstruction += `\n\n=== USER PROVIDED CONTEXT (MEMORIZE THIS) ===\n`;
-              activeAssets.forEach(asset => {
-                  effectiveSystemInstruction += `\n--- START OF ${asset.name} ---\n${asset.content}\n--- END OF ${asset.name} ---\n`;
-              });
-              effectiveSystemInstruction += `\nINSTRUCTION: Use the information above to assist the user. If they ask about their resume or script, refer to these specific details.`;
-          }
-      }
-
-      // 5. User Preferences (Level 5)
+      // 5. User Preferences
       if (config.preferences) {
           effectiveSystemInstruction += `\n\nUSER PROFILE:\n
           - Preferred Style: ${config.preferences.coachingStyle.toUpperCase()}.
@@ -146,9 +146,14 @@ export class LiveClient {
 
       const voiceName = config.activeAgent?.voiceName || 'Zephyr';
 
+      // MODEL SELECTION BASED ON TIER
+      const modelName = config.serviceTier === 'premium' 
+          ? 'gemini-2.5-flash-native-audio-preview-09-2025'
+          : 'gemini-2.0-flash-exp';
+
       // Connect to Gemini Live
       this.sessionPromise = this.ai.live.connect({
-        model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+        model: modelName,
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {
@@ -174,25 +179,19 @@ export class LiveClient {
       }
 
     } catch (error: any) {
-      // If connect fails immediately, clean up and report
       this.sessionPromise = null;
       this.handleOnError(error);
     }
   }
 
-  public async generateTailoredScenarios(user: UserProfile): Promise<Scenario[]> {
-    const tempAi = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const focus = user.preferences?.focusAreas?.join(', ') || 'General communication';
-    const goal = user.preferences?.communicationGoal || 'Improve speaking skills';
+  public async generateTailoredScenarios(user: any): Promise<Scenario[]> {
+    if (!process.env.API_KEY) return [];
 
+    const tempAi = new GoogleGenAI({ apiKey: process.env.API_KEY });
     try {
       const response = await tempAi.models.generateContent({
         model: 'gemini-2.5-flash',
-        contents: `Create 4 personalized communication coaching scenarios for a user named ${user.name}.
-        Their Focus Areas: ${focus}
-        Their Specific Goal: "${goal}"
-        
-        Return a JSON array of 4 distinct scenarios (e.g. Work, Social, Negotiation, etc).`,
+        contents: `Create 4 personalized communication coaching scenarios for a user named ${user.name}. Focus Areas: ${user.preferences?.focusAreas?.join(', ') || 'General'}. Goal: ${user.preferences?.communicationGoal || 'Improvement'}. Return a JSON array.`,
         config: {
           responseMimeType: 'application/json',
           responseSchema: {
@@ -220,11 +219,13 @@ export class LiveClient {
     }
   }
 
-  public async analyzeVideoSnapshot(base64Image: string): Promise<string> {
+  public async analyzeVideoSnapshot(base64Image: string, tier: ServiceTier = 'standard'): Promise<string> {
     const tempAi = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const model = tier === 'premium' ? 'gemini-3-pro-preview' : 'gemini-2.5-flash';
+
     try {
       const response = await tempAi.models.generateContent({
-        model: 'gemini-3-pro-preview',
+        model: model,
         contents: {
           parts: [
             { 
@@ -250,7 +251,7 @@ export class LiveClient {
       if (!this.sessionPromise) return;
       try {
           const session = await this.sessionPromise;
-          const silence = new Float32Array(16000 * 0.5); 
+          const silence = new Float32Array(16000 * 0.2); // Smaller silence burst
           const blob = createAudioBlob(silence, 16000);
           session.sendRealtimeInput({ media: blob });
       } catch (e) {
@@ -259,6 +260,7 @@ export class LiveClient {
   }
 
   public async disconnect() {
+    this.disconnectExpected = true;
     this.stopAudioProcessing();
     this.updateStatus(LiveStatus.DISCONNECTED);
 
@@ -272,6 +274,7 @@ export class LiveClient {
             session.close();
         }
       } catch (e) {
+        // ignore close errors
       }
     }
   }
@@ -290,7 +293,6 @@ export class LiveClient {
     this.processor = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
 
     this.processor.onaudioprocess = (e) => {
-      // Safety check: ensure we are actually connected before processing
       if (this.status !== LiveStatus.CONNECTED || !this.sessionPromise) return;
 
       const inputData = e.inputBuffer.getChannelData(0);
@@ -299,11 +301,13 @@ export class LiveClient {
       const currentSessionPromise = this.sessionPromise;
       if (currentSessionPromise) {
           currentSessionPromise.then((session) => {
-            // Re-check status inside the microtask to avoid race conditions on disconnect
             if (this.status !== LiveStatus.CONNECTED) return;
             try { 
                 session.sendRealtimeInput({ media: blob }); 
-            } catch (err) {}
+            } catch (err) {
+                // Safely ignore send errors if the connection is dropping
+                // This prevents "Network Error" spam during teardown
+            }
           }).catch((_e) => {});
       }
     };
@@ -419,7 +423,7 @@ export class LiveClient {
   }
 
   private handleOnError(error: any) {
-    if (this.status === LiveStatus.DISCONNECTED) return;
+    if (this.status === LiveStatus.ERROR) return;
 
     let message = "Connection error";
     if (error instanceof Error) {
@@ -428,10 +432,10 @@ export class LiveClient {
         message = (error as any).message || JSON.stringify(error) || "Network connection failed.";
     }
     
-    // Ignore generic session closed errors or abort errors to prevent UI flicker
-    if (message.includes("closed") || message.includes("aborted") || message.includes("Network error")) {
-        this.handleOnClose(new CloseEvent("close"));
-        return;
+    // Check if error is due to intentional disconnect or benign close
+    if (message.includes("closed") || message.includes("aborted")) {
+        if (this.disconnectExpected) return;
+        message = "Connection closed by server.";
     }
 
     console.error("Live Client Error Details:", error);
@@ -442,6 +446,13 @@ export class LiveClient {
 
   private handleOnClose(event: CloseEvent) {
     this.stopAudioProcessing();
+    
+    // If user didn't initiate disconnect, treat it as an error
+    if (!this.disconnectExpected && this.status !== LiveStatus.DISCONNECTED) {
+        this.handleOnError(new Error("Connection closed by server."));
+        return;
+    }
+
     if (this.status !== LiveStatus.DISCONNECTED) {
         this.updateStatus(LiveStatus.DISCONNECTED);
     }

@@ -1,17 +1,19 @@
 
 import React, { useState } from 'react';
-import { UserProfile, Language } from '../types';
+import { UserProfile, Language, ServiceTier } from '../types';
 import { MessageCircleHeart, Loader2, Globe } from 'lucide-react';
 import { getTranslation } from '../constants';
+import { TierSelector } from './TierSelector';
 
 interface LoginProps {
-  onLogin: (user: UserProfile, lang: Language) => void;
+  onLogin: (user: UserProfile, lang: Language, tier: ServiceTier) => void;
   initialLanguage?: Language;
 }
 
 export const Login: React.FC<LoginProps> = ({ onLogin, initialLanguage = 'en' }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [language, setLanguage] = useState<Language>(initialLanguage);
+  const [tier, setTier] = useState<ServiceTier>('standard');
 
   const handleGoogleSignIn = () => {
     setIsLoading(true);
@@ -25,7 +27,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, initialLanguage = 'en' })
         avatarUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Alex&backgroundColor=b6e3f4',
         history: []
       };
-      onLogin(mockUser, language);
+      onLogin(mockUser, language, tier);
       setIsLoading(false);
     }, 1500);
   };
@@ -66,6 +68,8 @@ export const Login: React.FC<LoginProps> = ({ onLogin, initialLanguage = 'en' })
           <h2 className="text-xl font-medium text-stone-200 mb-6 text-center">
              {getTranslation(language, 'sign_in')}
           </h2>
+
+          <TierSelector tier={tier} onChange={setTier} language={language} variant="login" />
           
           <button
             onClick={handleGoogleSignIn}

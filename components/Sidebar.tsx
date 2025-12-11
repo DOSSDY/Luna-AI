@@ -27,8 +27,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const navItems: { id: AppView; label: string; icon: React.ReactNode }[] = [
     { id: 'call', label: getTranslation(language, 'nav_call'), icon: <Mic className="w-5 h-5" /> },
-    { id: 'context', label: getTranslation(language, 'nav_context'), icon: <FolderOpen className="w-5 h-5" /> },
-    { id: 'recommendations', label: getTranslation(language, 'nav_recs'), icon: <BookOpen className="w-5 h-5" /> },
+    { id: 'context', label: "Knowledge", icon: <FolderOpen className="w-5 h-5" /> },
+    { id: 'recommendations', label: 'Resources', icon: <BookOpen className="w-5 h-5" /> },
     { id: 'profile', label: getTranslation(language, 'nav_profile'), icon: <User className="w-5 h-5" /> },
   ];
 
@@ -41,7 +41,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       />
 
       {/* Sidebar Container */}
-      {/* On mobile: Fixed, sliding X. On Desktop: Static (relative), sliding Width. */}
       <div className={`
         fixed inset-y-0 left-0 z-30 bg-stone-900 border-r border-stone-800 
         transform transition-[transform,width] duration-300 ease-in-out
