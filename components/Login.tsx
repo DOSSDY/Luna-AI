@@ -1,13 +1,17 @@
+
 import React, { useState } from 'react';
-import { UserProfile } from '../types';
-import { MessageCircleHeart, Loader2 } from 'lucide-react';
+import { UserProfile, Language } from '../types';
+import { MessageCircleHeart, Loader2, Globe } from 'lucide-react';
+import { getTranslation } from '../constants';
 
 interface LoginProps {
-  onLogin: (user: UserProfile) => void;
+  onLogin: (user: UserProfile, lang: Language) => void;
+  initialLanguage?: Language;
 }
 
-export const Login: React.FC<LoginProps> = ({ onLogin }) => {
+export const Login: React.FC<LoginProps> = ({ onLogin, initialLanguage = 'en' }) => {
   const [isLoading, setIsLoading] = useState(false);
+  const [language, setLanguage] = useState<Language>(initialLanguage);
 
   const handleGoogleSignIn = () => {
     setIsLoading(true);
@@ -21,7 +25,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
         avatarUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Alex&backgroundColor=b6e3f4',
         history: []
       };
-      onLogin(mockUser);
+      onLogin(mockUser, language);
       setIsLoading(false);
     }, 1500);
   };
@@ -32,19 +36,36 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
       <div className="blob bg-teal-900/30 w-[600px] h-[600px] rounded-full top-[-150px] left-[-150px] absolute mix-blend-screen blur-[100px]" />
       <div className="blob bg-indigo-900/30 w-[600px] h-[600px] rounded-full bottom-[-150px] right-[-150px] absolute mix-blend-screen blur-[100px] animation-delay-2000" />
 
+      {/* Language Toggle Top Right */}
+      <div className="absolute top-6 right-6 z-20">
+         <button
+            onClick={() => setLanguage(prev => prev === 'en' ? 'th' : 'en')}
+            className="flex items-center gap-2 px-4 py-2 rounded-full bg-stone-800/50 hover:bg-stone-800 text-stone-300 hover:text-white transition-all backdrop-blur-md border border-stone-700 shadow-lg"
+         >
+            <Globe className="w-4 h-4" />
+            <span className="text-sm font-semibold">{language === 'en' ? 'English' : 'ไทย'}</span>
+         </button>
+      </div>
+
       <div className="z-10 w-full max-w-md p-8 mx-4">
         {/* Logo Section */}
         <div className="flex flex-col items-center mb-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
           <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-teal-400/20 to-emerald-400/20 flex items-center justify-center border border-teal-500/20 shadow-2xl shadow-teal-900/30 mb-6">
             <MessageCircleHeart className="w-10 h-10 text-teal-400" />
           </div>
-          <h1 className="text-4xl font-semibold text-stone-100 mb-2 tracking-tight text-center">Luna</h1>
-          <p className="text-stone-400 text-center text-lg">Your personal AI communication coach.</p>
+          <h1 className="text-4xl font-semibold text-stone-100 mb-2 tracking-tight text-center">
+             {getTranslation(language, 'app_name')}
+          </h1>
+          <p className="text-stone-400 text-center text-lg">
+             {getTranslation(language, 'app_subtitle')}
+          </p>
         </div>
 
         {/* Login Card */}
         <div className="bg-stone-800/40 backdrop-blur-xl border border-stone-700/50 rounded-2xl p-8 shadow-xl animate-in fade-in slide-in-from-bottom-8 duration-1000 delay-100">
-          <h2 className="text-xl font-medium text-stone-200 mb-6 text-center">Sign in to continue</h2>
+          <h2 className="text-xl font-medium text-stone-200 mb-6 text-center">
+             {getTranslation(language, 'sign_in')}
+          </h2>
           
           <button
             onClick={handleGoogleSignIn}
@@ -73,14 +94,14 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                     fill="#EA4335"
                   />
                 </svg>
-                <span>Sign in with Google</span>
+                <span>{getTranslation(language, 'sign_in_google')}</span>
               </>
             )}
           </button>
 
           <div className="mt-6 text-center">
              <p className="text-xs text-stone-500">
-               By continuing, you agree to our Terms of Service and Privacy Policy.
+               {getTranslation(language, 'terms')}
              </p>
           </div>
         </div>

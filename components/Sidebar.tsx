@@ -1,7 +1,8 @@
 
 import React from 'react';
-import { Mic, BookOpen, User, X, MessageCircleHeart, LogOut, PanelLeftClose } from 'lucide-react';
-import { AppView, UserProfile } from '../types';
+import { Mic, BookOpen, User, X, MessageCircleHeart, LogOut, PanelLeftClose, FolderOpen } from 'lucide-react';
+import { AppView, UserProfile, Language } from '../types';
+import { getTranslation } from '../constants';
 
 interface SidebarProps {
   currentView: AppView;
@@ -11,6 +12,7 @@ interface SidebarProps {
   desktopIsOpen?: boolean; // Desktop state
   user: UserProfile | null;
   onLogout: () => void;
+  language: Language;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ 
@@ -20,12 +22,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
     onToggle, 
     desktopIsOpen = true, 
     user, 
-    onLogout 
+    onLogout,
+    language
 }) => {
   const navItems: { id: AppView; label: string; icon: React.ReactNode }[] = [
-    { id: 'call', label: "Call 'Luna'", icon: <Mic className="w-5 h-5" /> },
-    { id: 'recommendations', label: 'Recommendations', icon: <BookOpen className="w-5 h-5" /> },
-    { id: 'profile', label: 'My Profile', icon: <User className="w-5 h-5" /> },
+    { id: 'call', label: getTranslation(language, 'nav_call'), icon: <Mic className="w-5 h-5" /> },
+    { id: 'context', label: getTranslation(language, 'nav_context'), icon: <FolderOpen className="w-5 h-5" /> },
+    { id: 'recommendations', label: getTranslation(language, 'nav_recs'), icon: <BookOpen className="w-5 h-5" /> },
+    { id: 'profile', label: getTranslation(language, 'nav_profile'), icon: <User className="w-5 h-5" /> },
   ];
 
   return (
@@ -56,7 +60,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-teal-400/20 to-emerald-400/20 flex items-center justify-center border border-teal-500/10 group-hover:border-teal-500/30 transition-all">
                     <MessageCircleHeart className="w-6 h-6 text-teal-400 group-hover:scale-110 transition-transform" />
                 </div>
-                <span className="font-semibold text-2xl text-stone-100 tracking-tight">Luna</span>
+                <span className="font-semibold text-2xl text-stone-100 tracking-tight">
+                    {getTranslation(language, 'app_name')}
+                </span>
             </div>
             {/* Close Button (Mobile) */}
             <button onClick={onToggle} className="md:hidden text-stone-400 hover:text-white">
@@ -106,13 +112,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <button 
                     onClick={onLogout}
                     className="text-stone-500 hover:text-red-400 p-1.5 hover:bg-red-900/10 rounded-lg transition-colors"
-                    title="Sign out"
+                    title={getTranslation(language, 'nav_logout')}
                 >
                     <LogOut className="w-4 h-4" />
                 </button>
                 </div>
             ) : (
-                <p className="text-xs text-stone-600 text-center py-2">Not signed in</p>
+                <p className="text-xs text-stone-600 text-center py-2">
+                    {getTranslation(language, 'not_signed_in')}
+                </p>
             )}
             </div>
         </div>

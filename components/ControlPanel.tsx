@@ -1,15 +1,17 @@
 
 import React from 'react';
 import { Mic, Square, Loader2, Sparkles } from 'lucide-react';
-import { LiveStatus } from '../types';
+import { LiveStatus, Language } from '../types';
+import { getTranslation } from '../constants';
 
 interface ControlPanelProps {
   status: LiveStatus;
   onConnect: () => void;
   onDisconnect: () => void;
+  language: Language;
 }
 
-export const ControlPanel: React.FC<ControlPanelProps> = ({ status, onConnect, onDisconnect }) => {
+export const ControlPanel: React.FC<ControlPanelProps> = ({ status, onConnect, onDisconnect, language }) => {
   if (status === LiveStatus.RESEARCHING) {
       return (
         <div className="flex flex-col items-center gap-4">
@@ -17,8 +19,12 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({ status, onConnect, o
             <Sparkles className="w-8 h-8 animate-pulse" />
           </button>
           <div className="flex flex-col items-center">
-             <p className="text-teal-400 text-sm font-medium tracking-wide animate-pulse">Researching Strategy...</p>
-             <p className="text-stone-600 text-xs mt-1">Scanning psychology database</p>
+             <p className="text-teal-400 text-sm font-medium tracking-wide animate-pulse">
+                {getTranslation(language, 'researching')}
+             </p>
+             <p className="text-stone-600 text-xs mt-1">
+                {getTranslation(language, 'scanning_db')}
+             </p>
           </div>
         </div>
       );
@@ -30,7 +36,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({ status, onConnect, o
         <button disabled className="bg-stone-700 text-stone-400 rounded-full p-6 transition-all">
           <Loader2 className="w-8 h-8 animate-spin" />
         </button>
-        <p className="text-stone-400 text-sm tracking-wide animate-pulse">Connecting to Luna...</p>
+        <p className="text-stone-400 text-sm tracking-wide animate-pulse">
+            {getTranslation(language, 'connecting')}
+        </p>
       </div>
     );
   }
@@ -44,7 +52,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({ status, onConnect, o
         >
           <Square className="w-8 h-8 fill-current" />
         </button>
-        <p className="text-stone-400 text-sm tracking-wide">Tap to end session</p>
+        <p className="text-stone-400 text-sm tracking-wide">
+            {getTranslation(language, 'tap_end')}
+        </p>
       </div>
     );
   }
@@ -58,7 +68,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({ status, onConnect, o
       >
         <Mic className="w-8 h-8 group-hover:stroke-2" />
       </button>
-      <p className="text-stone-400 text-sm tracking-wide">Tap to start coaching</p>
+      <p className="text-stone-400 text-sm tracking-wide">
+         {getTranslation(language, 'tap_start')}
+      </p>
     </div>
   );
 };

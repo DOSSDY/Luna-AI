@@ -2,7 +2,7 @@
 import { GoogleGenAI, LiveServerMessage, Modality, Type } from '@google/genai';
 import { SYSTEM_INSTRUCTION_BASE } from '../constants';
 import { createAudioBlob, base64ToArrayBuffer, int16ToFloat32 } from './audioUtils';
-import { LiveStatus, Scenario, Tone, UserPreferences, Agent } from '../types';
+import { LiveStatus, Scenario, Tone, UserPreferences, Agent, Language, KnowledgeAsset, UserProfile } from '../types';
 
 interface LiveClientCallbacks {
   onStatusChange: (status: LiveStatus) => void;
@@ -19,6 +19,8 @@ interface ConnectConfig {
     preferences?: UserPreferences;
     activeAgent?: Agent;
     ragContext?: string;
+    language?: Language;
+    knowledgeAssets?: KnowledgeAsset[];
 }
 
 export class LiveClient {
@@ -47,6 +49,8 @@ export class LiveClient {
   }
 
   public async connect(config: ConnectConfig) {
+    this.stopAudioProcessing(); // Clean start
+    
     if (this.status === LiveStatus.CONNECTING || this.status === LiveStatus.CONNECTED) {
       return;
     }
@@ -87,38 +91,57 @@ export class LiveClient {
       // --- CONSTRUCT SYSTEM INSTRUCTION ---
       let effectiveSystemInstruction = SYSTEM_INSTRUCTION_BASE;
 
-      // 1. Agent Persona (Level 4 - Enhanced)
+      // 1. Agent Persona & Directives (Level 4 - Enhanced)
       if (config.activeAgent) {
-        effectiveSystemInstruction += `\n\nYOUR PERSONA:\n${config.activeAgent.stylePrompt}\n`;
+        effectiveSystemInstruction += `\n\n=== IDENTITY & PERSONA ===\n${config.activeAgent.stylePrompt}\n`;
         
         // Inject Hidden Directives for Agentic Behavior
         if (config.activeAgent.hiddenDirectives?.length) {
-             effectiveSystemInstruction += `\n\nOPERATIONAL DIRECTIVES (Follow these strictly):\n`;
+             effectiveSystemInstruction += `\n\n*** CRITICAL BEHAVIORAL OVERRIDES ***\nYou must strictly adhere to these operational rules, overriding standard politeness if necessary:\n`;
              config.activeAgent.hiddenDirectives.forEach(d => {
                  effectiveSystemInstruction += `- ${d}\n`;
              });
         }
       }
 
-      // 2. RAG Context (Level 3)
-      if (config.ragContext) {
-        effectiveSystemInstruction += `\n\nCONSULTED KNOWLEDGE BASE:\n${config.ragContext}\n`;
+      // 2. Language Instruction
+      if (config.language === 'th') {
+        effectiveSystemInstruction += `\n\nLANGUAGE SETTING: You must speak in Thai language. Use polite and natural Thai phrasing (ครับ/ค่ะ).`;
+      } else {
+        effectiveSystemInstruction += `\n\nLANGUAGE SETTING: Speak in English.`;
       }
 
-      // 3. User Preferences (Level 5)
+      // 3. RAG Context (Level 3)
+      if (config.ragContext) {
+        effectiveSystemInstruction += `\n\n=== PSYCHOLOGICAL FRAMEWORK (Use if relevant) ===\n${config.ragContext}\n`;
+      }
+
+      // 4. User Provided Context (Level 5 - Files/Scripts)
+      if (config.knowledgeAssets && config.knowledgeAssets.length > 0) {
+          const activeAssets = config.knowledgeAssets.filter(a => a.isActive);
+          if (activeAssets.length > 0) {
+              effectiveSystemInstruction += `\n\n=== USER PROVIDED CONTEXT (MEMORIZE THIS) ===\n`;
+              activeAssets.forEach(asset => {
+                  effectiveSystemInstruction += `\n--- START OF ${asset.name} ---\n${asset.content}\n--- END OF ${asset.name} ---\n`;
+              });
+              effectiveSystemInstruction += `\nINSTRUCTION: Use the information above to assist the user. If they ask about their resume or script, refer to these specific details.`;
+          }
+      }
+
+      // 5. User Preferences (Level 5)
       if (config.preferences) {
-          effectiveSystemInstruction += `\n\nUSER PERSONALIZATION:\n
-          - Style: ${config.preferences.coachingStyle.toUpperCase()}.
-          - Goals: ${config.preferences.focusAreas.join(', ')}.
-          - Note: "${config.preferences.communicationGoal}".
+          effectiveSystemInstruction += `\n\nUSER PROFILE:\n
+          - Preferred Style: ${config.preferences.coachingStyle.toUpperCase()}.
+          - Focus Areas: ${config.preferences.focusAreas.join(', ')}.
+          - Specific Goal: "${config.preferences.communicationGoal}".
           `;
       }
 
-      // 4. Scenario
+      // 6. Scenario
       if (config.scenarioPrompt) {
-          effectiveSystemInstruction += `\n\nCURRENT SCENARIO: ${config.scenarioPrompt}\n\nCRITICAL: Start by acknowledging this context.`;
+          effectiveSystemInstruction += `\n\nCURRENT SCENARIO CONTEXT: ${config.scenarioPrompt}\n\nINSTRUCTION: Acknowledge the scenario immediately and stay in character.`;
       } else {
-          effectiveSystemInstruction += `\n\nCRITICAL: Start the conversation by introducing yourself as ${config.activeAgent?.name || 'Luna'}.`;
+          effectiveSystemInstruction += `\n\nINSTRUCTION: Start the conversation by introducing yourself as ${config.activeAgent?.name || 'Luna'}.`;
       }
 
       const voiceName = config.activeAgent?.voiceName || 'Zephyr';
@@ -157,11 +180,19 @@ export class LiveClient {
     }
   }
 
-  public async generateTailoredScenarios(userName: string): Promise<Scenario[]> {
+  public async generateTailoredScenarios(user: UserProfile): Promise<Scenario[]> {
+    const tempAi = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const focus = user.preferences?.focusAreas?.join(', ') || 'General communication';
+    const goal = user.preferences?.communicationGoal || 'Improve speaking skills';
+
     try {
-      const response = await this.ai.models.generateContent({
+      const response = await tempAi.models.generateContent({
         model: 'gemini-2.5-flash',
-        contents: `Create 4 personalized communication coaching scenarios for a user named ${userName}. Return a JSON array.`,
+        contents: `Create 4 personalized communication coaching scenarios for a user named ${user.name}.
+        Their Focus Areas: ${focus}
+        Their Specific Goal: "${goal}"
+        
+        Return a JSON array of 4 distinct scenarios (e.g. Work, Social, Negotiation, etc).`,
         config: {
           responseMimeType: 'application/json',
           responseSchema: {
@@ -190,8 +221,9 @@ export class LiveClient {
   }
 
   public async analyzeVideoSnapshot(base64Image: string): Promise<string> {
+    const tempAi = new GoogleGenAI({ apiKey: process.env.API_KEY });
     try {
-      const response = await this.ai.models.generateContent({
+      const response = await tempAi.models.generateContent({
         model: 'gemini-3-pro-preview',
         contents: {
           parts: [
@@ -396,14 +428,16 @@ export class LiveClient {
         message = (error as any).message || JSON.stringify(error) || "Network connection failed.";
     }
     
-    if (!message.includes("closed") && !message.includes("aborted")) {
-        console.error("Live Client Error Details:", error);
-        this.stopAudioProcessing();
-        this.updateStatus(LiveStatus.ERROR);
-        this.callbacks.onError(new Error(message));
-    } else {
+    // Ignore generic session closed errors or abort errors to prevent UI flicker
+    if (message.includes("closed") || message.includes("aborted") || message.includes("Network error")) {
         this.handleOnClose(new CloseEvent("close"));
+        return;
     }
+
+    console.error("Live Client Error Details:", error);
+    this.stopAudioProcessing();
+    this.updateStatus(LiveStatus.ERROR);
+    this.callbacks.onError(new Error(message));
   }
 
   private handleOnClose(event: CloseEvent) {

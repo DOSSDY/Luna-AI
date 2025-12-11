@@ -1,22 +1,26 @@
 
 import React from 'react';
-import { AGENTS } from '../constants';
-import { Agent } from '../types';
+import { Agent, Language } from '../types';
 import { Check } from 'lucide-react';
+import { getTranslation } from '../constants';
 
 interface AgentSelectorProps {
   selectedAgentId: string;
   onSelect: (agent: Agent) => void;
+  localizedAgents: Agent[];
+  language: Language;
 }
 
-export const AgentSelector: React.FC<AgentSelectorProps> = ({ selectedAgentId, onSelect }) => {
+export const AgentSelector: React.FC<AgentSelectorProps> = ({ selectedAgentId, onSelect, localizedAgents, language }) => {
   return (
     <div className="w-full max-w-4xl mb-6 animate-in fade-in slide-in-from-bottom-2 duration-700">
       <div className="flex items-center justify-between px-1 mb-2">
-        <span className="text-xs font-semibold text-stone-500 uppercase tracking-wider">Choose your Partner</span>
+        <span className="text-xs font-semibold text-stone-500 uppercase tracking-wider">
+            {getTranslation(language, 'choose_partner')}
+        </span>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        {AGENTS.map((agent) => {
+        {localizedAgents.map((agent) => {
           const isSelected = selectedAgentId === agent.id;
           return (
             <button

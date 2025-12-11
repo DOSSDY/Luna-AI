@@ -52,9 +52,19 @@ export interface KnowledgeSnippet {
   tags: string[];
 }
 
-export type AppView = 'call' | 'recommendations' | 'profile';
+export interface KnowledgeAsset {
+  id: string;
+  name: string;
+  type: 'text'; // Future: 'pdf' | 'doc'
+  content: string;
+  isActive: boolean;
+}
+
+export type AppView = 'call' | 'recommendations' | 'profile' | 'context';
 
 export type CoachingStyle = 'gentle' | 'direct' | 'analytical';
+
+export type Language = 'en' | 'th';
 
 export interface UserPreferences {
   coachingStyle: CoachingStyle;
@@ -80,6 +90,7 @@ export interface UserProfile {
   avatarUrl?: string;
   preferences?: UserPreferences;
   history: SessionAnalysis[];
+  knowledgeAssets?: KnowledgeAsset[];
 }
 
 export type Tone = 'neutral' | 'warm' | 'anxious' | 'encouraging' | 'assertive';

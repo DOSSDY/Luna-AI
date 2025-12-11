@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { LiveClient } from './services/liveClient';
-import { LiveStatus, ChatMessage, Scenario, ScenarioType, AppView, UserProfile, UserPreferences, Agent } from './types';
-import { SCENARIOS, AGENTS } from './constants';
+import { LiveStatus, ChatMessage, Scenario, ScenarioType, AppView, UserProfile, UserPreferences, Agent, Language, KnowledgeAsset } from './types';
+import { SCENARIOS, AGENTS, getTranslation, getLocalizedAgents, getLocalizedScenarios } from './constants';
 import { StorageService } from './services/storage';
 import { AnalysisService } from './services/analysisService';
 import { KnowledgeService } from './services/knowledgeService';
@@ -15,12 +15,16 @@ import { Profile } from './components/Profile';
 import { Login } from './components/Login';
 import { Onboarding } from './components/Onboarding';
 import { AgentSelector } from './components/AgentSelector';
-import { Sparkles, Video, VideoOff, BrainCircuit, PanelLeftOpen, PanelLeftClose, ScanEye, X, Loader2, Trophy, Target } from 'lucide-react';
+import { ContextManager } from './components/ContextManager';
+import { Sparkles, Video, VideoOff, BrainCircuit, PanelLeftOpen, PanelLeftClose, ScanEye, X, Loader2, Trophy, Target, Globe, Key } from 'lucide-react';
 
 const App: React.FC = () => {
   // Auth & User State
   const [user, setUser] = useState<UserProfile | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
+
+  // Localization State
+  const [language, setLanguage] = useState<Language>('en');
 
   const [status, setStatus] = useState<LiveStatus>(LiveStatus.DISCONNECTED);
   const [inputVol, setInputVol] = useState(0);
@@ -36,6 +40,9 @@ const App: React.FC = () => {
   const [dynamicScenarios, setDynamicScenarios] = useState<Scenario[]>([]);
   const [videoAnalysis, setVideoAnalysis] = useState<{ loading: boolean; result: string | null }>({ loading: false, result: null });
   const [isAnalyzingSession, setIsAnalyzingSession] = useState(false);
+
+  // Level 5: Knowledge Assets (User Context)
+  const [knowledgeAssets, setKnowledgeAssets] = useState<KnowledgeAsset[]>([]);
 
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -54,15 +61,19 @@ const App: React.FC = () => {
       setUser(storedUser);
       // Check if preferences are missing to show onboarding again (migration support)
       if (!storedUser.preferences) setShowOnboarding(true);
+      // Load assets if present
+      if (storedUser.knowledgeAssets) setKnowledgeAssets(storedUser.knowledgeAssets);
     }
   }, []);
 
   // Handle Login
-  const handleLogin = (loggedInUser: UserProfile) => {
+  const handleLogin = (loggedInUser: UserProfile, lang: Language) => {
+    setLanguage(lang);
     // Check if we have a stored version of this user to preserve history
     const stored = StorageService.getUser();
     if (stored && stored.id === loggedInUser.id) {
         setUser(stored);
+        if (stored.knowledgeAssets) setKnowledgeAssets(stored.knowledgeAssets);
         if (!stored.preferences) setShowOnboarding(true);
     } else {
         setUser({ ...loggedInUser, history: [] }); // Initialize new history
@@ -81,10 +92,20 @@ const App: React.FC = () => {
     }
   };
 
+  // Update Assets & Persist
+  const handleUpdateAssets = (newAssets: KnowledgeAsset[]) => {
+      setKnowledgeAssets(newAssets);
+      if (user) {
+          const updatedUser = { ...user, knowledgeAssets: newAssets };
+          setUser(updatedUser);
+          StorageService.saveUser(updatedUser);
+      }
+  };
+
   // Load Dynamic Scenarios when User changes
   useEffect(() => {
     if (user && liveClientRef.current) {
-        liveClientRef.current.generateTailoredScenarios(user.name)
+        liveClientRef.current.generateTailoredScenarios(user)
             .then(scenarios => {
                 if (scenarios && scenarios.length > 0) {
                     setDynamicScenarios(scenarios);
@@ -94,8 +115,10 @@ const App: React.FC = () => {
     }
   }, [user]);
 
-  // Combine static and dynamic scenarios
-  const displayScenarios = dynamicScenarios.length > 0 ? dynamicScenarios : SCENARIOS;
+  // Combined Scenarios (Static + Dynamic) - Localized
+  const localizedScenarios = getLocalizedScenarios(language);
+  const displayScenarios = dynamicScenarios.length > 0 ? dynamicScenarios : localizedScenarios;
+  const localizedAgents = getLocalizedAgents(language);
 
   useEffect(() => {
     liveClientRef.current = new LiveClient({
@@ -119,7 +142,7 @@ const App: React.FC = () => {
       },
       onError: (err) => {
         console.error(err);
-        setErrorMsg("Connection error. Please try again.");
+        setErrorMsg(err.message || "Connection error. Please try again.");
         setStatus(LiveStatus.ERROR);
       }
     });
@@ -146,9 +169,19 @@ const App: React.FC = () => {
 
     setErrorMsg(null);
     setMessages([]);
-    if (!process.env.API_KEY) {
-      setErrorMsg("API Key not found.");
-      return;
+
+    // API Key Check
+    const aiStudio = (window as any).aistudio;
+    if (aiStudio) {
+      const hasKey = await aiStudio.hasSelectedApiKey();
+      if (!hasKey) {
+          try {
+              await aiStudio.openSelectKey();
+          } catch (e) {
+              setErrorMsg("Failed to select API key.");
+              return;
+          }
+      }
     }
 
     // Update status to Researching (shows UI loader)
@@ -162,10 +195,9 @@ const App: React.FC = () => {
     }
 
     // 2. Resolve Agent
-    const activeAgent = AGENTS.find(a => a.id === selectedAgentId) || AGENTS[0];
+    const activeAgent = localizedAgents.find(a => a.id === selectedAgentId) || localizedAgents[0];
 
     // 3. Resolve RAG Context (Hybrid Research Engine)
-    // We combine goal, scenario, and user focus areas to search the knowledge base or web
     const focusAreas = user?.preferences?.focusAreas || [];
     let ragContext = '';
     
@@ -173,7 +205,6 @@ const App: React.FC = () => {
         ragContext = await KnowledgeService.findOrFetchContext(customGoal, scenario?.label || '', focusAreas);
     } catch (e) {
         console.error("Context retrieval failed", e);
-        // Fallback continues without context
     }
 
     await liveClientRef.current?.connect({ 
@@ -181,10 +212,12 @@ const App: React.FC = () => {
         scenarioPrompt,
         preferences: user?.preferences,
         activeAgent,
-        ragContext
+        ragContext,
+        language,
+        knowledgeAssets // Pass active text assets to the model
     });
     
-  }, [useCamera, selectedScenario, displayScenarios, customGoal, user, selectedAgentId]);
+  }, [useCamera, selectedScenario, displayScenarios, customGoal, user, selectedAgentId, language, localizedAgents, knowledgeAssets]);
 
   const handleDisconnect = useCallback(async () => {
     await liveClientRef.current?.disconnect();
@@ -194,7 +227,7 @@ const App: React.FC = () => {
        setIsAnalyzingSession(true);
        try {
          const scenarioLabel = displayScenarios.find(s => s.id === selectedScenario)?.label || 'General';
-         const activeAgent = AGENTS.find(a => a.id === selectedAgentId);
+         const activeAgent = localizedAgents.find(a => a.id === selectedAgentId);
          
          const analysis = await analysisServiceRef.current.analyzeSession(messages, scenarioLabel, activeAgent);
          
@@ -209,7 +242,7 @@ const App: React.FC = () => {
        }
     }
 
-  }, [messages, selectedScenario, displayScenarios, selectedAgentId]);
+  }, [messages, selectedScenario, displayScenarios, selectedAgentId, localizedAgents]);
 
   const handleAnalyzeVideo = async () => {
     if (!videoRef.current || !liveClientRef.current) return;
@@ -247,7 +280,7 @@ const App: React.FC = () => {
   const insightProgress = Math.min((userMsgCount / insightThreshold) * 100, 100);
 
   // -- Views Components --
-  const activeAgent = AGENTS.find(a => a.id === selectedAgentId) || AGENTS[0];
+  const activeAgent = localizedAgents.find(a => a.id === selectedAgentId) || localizedAgents[0];
 
   const renderCallView = () => (
     <div className="flex flex-col h-full w-full relative overflow-hidden">
@@ -263,9 +296,20 @@ const App: React.FC = () => {
                     {desktopMenuOpen ? <PanelLeftClose className="w-6 h-6" /> : <PanelLeftOpen className="w-6 h-6" />}
                 </button>
                 <div className="flex items-center gap-2">
-                    <span className="font-semibold text-lg tracking-tight text-stone-100 hidden md:block">Session</span>
+                    <span className="font-semibold text-lg tracking-tight text-stone-100 hidden md:block">
+                      {getTranslation(language, 'session')}
+                    </span>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 items-center">
+                    {/* Language Toggle */}
+                    <button
+                        onClick={() => setLanguage(prev => prev === 'en' ? 'th' : 'en')}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-stone-800 text-stone-300 hover:bg-stone-700 hover:text-white transition-all text-xs font-bold tracking-wide border border-stone-700"
+                    >
+                        <Globe className="w-3.5 h-3.5" />
+                        {language === 'en' ? 'EN' : 'TH'}
+                    </button>
+
                     <button 
                         onClick={() => status === LiveStatus.DISCONNECTED && setUseCamera(!useCamera)}
                         className={`p-2 rounded-full transition-all border ${useCamera ? 'bg-stone-800 text-teal-400 border-teal-900/50' : 'text-stone-500 border-transparent hover:bg-stone-800'}`}
@@ -290,12 +334,12 @@ const App: React.FC = () => {
                         {insightProgress < 100 ? (
                             <>
                                 <Loader2 className="w-3 h-3 animate-spin" />
-                                Gathering Insights
+                                {getTranslation(language, 'gathering_insights')}
                             </>
                         ) : (
                             <>
                                 <Trophy className="w-3 h-3 text-yellow-500" />
-                                Insights Ready
+                                {getTranslation(language, 'insights_ready')}
                             </>
                         )}
                     </div>
@@ -313,10 +357,10 @@ const App: React.FC = () => {
             {status === LiveStatus.DISCONNECTED && (
                 <div className="w-full flex flex-col items-center text-center mb-6 animate-in fade-in slide-in-from-bottom-3 duration-700">
                     <h2 className="text-2xl md:text-3xl font-semibold text-stone-100 mb-2 tracking-tight">
-                        Anything Luna should know?
+                        {getTranslation(language, 'anything_luna_know')}
                     </h2>
                     <p className="text-stone-400 text-sm md:text-base font-light">
-                        Call to strengthen your communication skills with Luna
+                        {getTranslation(language, 'call_subtext')}
                     </p>
                 </div>
             )}
@@ -328,13 +372,17 @@ const App: React.FC = () => {
                     {/* Level 4: Agent Selector */}
                     <AgentSelector 
                         selectedAgentId={selectedAgentId} 
-                        onSelect={(agent) => setSelectedAgentId(agent.id)} 
+                        onSelect={(agent) => setSelectedAgentId(agent.id)}
+                        localizedAgents={localizedAgents}
+                        language={language}
                     />
 
                     {/* Scenario Selector */}
                     <div className="flex flex-col gap-2">
                          <div className="flex items-center justify-between px-1">
-                            <span className="text-xs font-semibold text-stone-500 uppercase tracking-wider">Select a Focus (Optional)</span>
+                            <span className="text-xs font-semibold text-stone-500 uppercase tracking-wider">
+                              {getTranslation(language, 'select_focus')}
+                            </span>
                         </div>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                             {displayScenarios.map((s) => (
@@ -364,8 +412,8 @@ const App: React.FC = () => {
                                 onChange={(e) => setCustomGoal(e.target.value)}
                                 placeholder={
                                     selectedScenario === 'general' 
-                                    ? "Add a specific goal (e.g., 'I want to work on my tone')..." 
-                                    : `Add details for ${displayScenarios.find(s => s.id === selectedScenario)?.label}...`
+                                    ? getTranslation(language, 'custom_goal_placeholder') 
+                                    : `${getTranslation(language, 'custom_goal_context_placeholder')}${displayScenarios.find(s => s.id === selectedScenario)?.label}...`
                                 }
                                 className="w-full bg-stone-800/40 border border-stone-800 rounded-xl px-4 py-3 pl-10 text-stone-200 placeholder-stone-500 focus:outline-none focus:border-teal-500/50 focus:bg-stone-800 transition-all text-sm shadow-inner"
                             />
@@ -391,15 +439,26 @@ const App: React.FC = () => {
                 {isAnalyzingSession ? (
                     <span className="text-teal-400 text-sm font-medium animate-pulse flex items-center gap-2">
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        Generating Post-Session Report...
+                        {getTranslation(language, 'generating_report')}
                     </span>
                 ) : status === LiveStatus.CONNECTED ? (
                     <span className="text-teal-400/80 text-xs font-bold tracking-[0.2em] uppercase animate-pulse flex items-center justify-center gap-2">
                     <div className="w-2 h-2 rounded-full bg-teal-500 animate-ping" />
-                    {selectedScenario === 'general' ? 'Live Session' : displayScenarios.find(s => s.id === selectedScenario)?.label} Active
+                    {getTranslation(language, 'live_session_active')}
                     </span>
                 ) : status === LiveStatus.ERROR ? (
-                    <span className="text-red-400 text-sm font-medium">{errorMsg}</span>
+                   <div className="flex items-center gap-3">
+                     <span className="text-red-400 text-sm font-medium">{errorMsg}</span>
+                     {errorMsg?.includes('Caller does not have permission') && (
+                       <button 
+                         onClick={() => (window as any).aistudio.openSelectKey()}
+                         className="flex items-center gap-1 bg-red-900/30 text-red-300 px-3 py-1 rounded-full text-xs hover:bg-red-900/50 border border-red-800 transition-colors"
+                       >
+                         <Key className="w-3 h-3" />
+                         Change Key
+                       </button>
+                     )}
+                   </div>
                 ) : null}
             </div>
 
@@ -469,8 +528,8 @@ const App: React.FC = () => {
                 <div className="flex-none text-center text-stone-500 text-sm max-w-[280px] leading-relaxed mt-4 animate-in fade-in slide-in-from-bottom-2 delay-300">
                     <p className="mb-4">
                         {selectedScenario === 'general' && !customGoal
-                            ? "Ready to practice? Tap the microphone below." 
-                            : "Tap mic to start session with your selected context."}
+                            ? getTranslation(language, 'tap_mic_general')
+                            : getTranslation(language, 'tap_mic_context')}
                     </p>
                     <div className="flex justify-center gap-4 opacity-50">
                         <BrainCircuit className="w-6 h-6" />
@@ -490,27 +549,42 @@ const App: React.FC = () => {
                 status={status} 
                 onConnect={() => handleConnect()} 
                 onDisconnect={handleDisconnect} 
+                language={language}
             />
         </div>
     </div>
   );
 
   const renderSecondaryHeader = () => (
-      <div className="p-4 flex items-center flex-none">
-          <button 
-            onClick={toggleMenu} 
-            className="p-2 text-stone-400 hover:text-white transition-colors"
+      <div className="p-4 flex items-center justify-between flex-none">
+          <div className="flex items-center">
+            <button 
+                onClick={toggleMenu} 
+                className="p-2 text-stone-400 hover:text-white transition-colors"
+            >
+                {desktopMenuOpen ? <PanelLeftClose className="w-6 h-6" /> : <PanelLeftClose className="w-6 h-6" />}
+            </button>
+            <span className="ml-4 font-semibold text-lg text-stone-100 capitalize">
+                {currentView === 'recommendations' 
+                    ? getTranslation(language, 'nav_recs') 
+                    : currentView === 'context'
+                    ? getTranslation(language, 'nav_context')
+                    : getTranslation(language, 'nav_profile')}
+            </span>
+          </div>
+          {/* Language Toggle for Secondary Views */}
+          <button
+                onClick={() => setLanguage(prev => prev === 'en' ? 'th' : 'en')}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-stone-800 text-stone-300 hover:bg-stone-700 hover:text-white transition-all text-xs font-bold tracking-wide border border-stone-700"
           >
-             {desktopMenuOpen ? <PanelLeftClose className="w-6 h-6" /> : <PanelLeftClose className="w-6 h-6" />}
+                <Globe className="w-3.5 h-3.5" />
+                {language === 'en' ? 'EN' : 'TH'}
           </button>
-          <span className="ml-4 font-semibold text-lg text-stone-100 capitalize">
-              {currentView === 'recommendations' ? 'Recommended Resources' : 'My Profile'}
-          </span>
       </div>
   );
 
   if (!user) {
-    return <Login onLogin={handleLogin} />;
+    return <Login onLogin={handleLogin} initialLanguage={language} />;
   }
 
   return (
@@ -527,6 +601,7 @@ const App: React.FC = () => {
         desktopIsOpen={desktopMenuOpen}
         user={user}
         onLogout={() => { setUser(null); StorageService.clear(); }}
+        language={language}
       />
 
       {/* Main Content Area */}
@@ -548,6 +623,17 @@ const App: React.FC = () => {
              <div className="h-full flex flex-col overflow-y-auto relative z-10">
                 {renderSecondaryHeader()}
                 <Profile messages={messages} user={user} />
+            </div>
+        )}
+
+        {currentView === 'context' && (
+            <div className="h-full flex flex-col overflow-y-auto relative z-10">
+                {renderSecondaryHeader()}
+                <ContextManager 
+                    assets={knowledgeAssets} 
+                    onUpdateAssets={handleUpdateAssets} 
+                    language={language}
+                />
             </div>
         )}
       </main>
